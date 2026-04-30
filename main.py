@@ -186,12 +186,19 @@ def stats() -> Dict:
 @app.post("/telegram/callback")
 async def telegram_callback(request: Request) -> Dict:
     """Webhook de Telegram para procesar botones inline."""
-    body = await request.json()
-    data = (body.get("callback_query") or {}).get("data", "")
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "error": "json inválido"}
+
+    callback_query = body.get("callback_query")
+    if not callback_query:
+        return {"ok": True}  # Ignorar mensajes normales u otros eventos
+
     try:
         supabase_client = SupabaseNewsClient()
         telegram = TelegramBotClient(supabase_client=supabase_client)
-        result = telegram.callback_handler(data)
+        result = telegram.callback_handler(callback_query)
         logger.info("Callback telegram procesado: %s", result)
         return result
     except Exception:

@@ -121,21 +121,68 @@ class TelegramBotClient:
                 return
             response.raise_for_status()
 
-    def callback_handler(self, callback_data: str) -> Dict:
+    def callback_handler(self, callback_query: Dict) -> Dict:
         """Procesa callbacks de los botones inline."""
-        if not callback_data:
+        if not callback_query:
             return {"ok": False, "error": "callback vacío"}
+
+        callback_data = callback_query.get("data", "")
+        callback_id = callback_query.get("id", "")
+        message = callback_query.get("message", {})
+        message_id = message.get("message_id")
+        chat_id = message.get("chat", {}).get("id")
+
+        # Confirmar el callback para detener el spinner en la app de Telegram
+        if callback_id:
+            with httpx.Client(timeout=10) as client:
+                try:
+                    client.post(f"{self.base_url}/answerCallbackQuery", data={"callback_query_id": callback_id})
+                except Exception:
+                    pass
 
         action, _, raw_id = callback_data.partition("_")
         if not raw_id:
             return {"ok": False, "error": "id inválido"}
 
         noticia_id = raw_id
+        estado_final = ""
+        mensaje_estado = ""
+        
         if action == "pub":
             self.supabase_client.update_estado(noticia_id, "publicada")
-            return {"ok": True, "id": noticia_id, "estado": "publicada"}
-        if action == "des":
+            estado_final = "publicada"
+            mensaje_estado = "✅ PUBLICADA"
+        elif action == "des":
             self.supabase_client.update_estado(noticia_id, "descartada")
-            return {"ok": True, "id": noticia_id, "estado": "descartada"}
+            estado_final = "descartada"
+            mensaje_estado = "❌ DESCARTADA"
+        else:
+            return {"ok": False, "error": "acción no soportada"}
 
-        return {"ok": False, "error": "acción no soportada"}
+        # Editar el mensaje para quitar los botones y agregar el estado
+        if message_id and chat_id:
+            is_photo = "photo" in message
+            original_text = message.get("caption") if is_photo else message.get("text")
+            original_text = original_text or ""
+            
+            new_text = f"[{mensaje_estado}]\n\n{original_text}"
+            
+            payload = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reply_markup": json.dumps({"inline_keyboard": []})  # Quitar botones
+            }
+            if is_photo:
+                payload["caption"] = new_text[:1024]
+                endpoint = "/editMessageCaption"
+            else:
+                payload["text"] = new_text[:4096]
+                endpoint = "/editMessageText"
+                
+            with httpx.Client(timeout=20) as client:
+                try:
+                    client.post(f"{self.base_url}{endpoint}", data=payload)
+                except Exception as e:
+                    logger.warning("No se pudo editar mensaje de Telegram: %s", e)
+
+        return {"ok": True, "id": noticia_id, "estado": estado_final}

@@ -464,25 +464,24 @@ class NewsScraper:
         """Normaliza el nombre de la sección."""
         mapping = {
             "policiales": "Policiales", "policial": "Policiales",
-            "seguridad": "Policiales",
+            "seguridad": "Policiales", "judiciales": "Policiales", "accidentes": "Policiales",
             "economia": "Economía", "economía": "Economía", "economic": "Economía",
+            "campo": "Economía", "agro": "Economía", "agropecuaria": "Economía", "empresas": "Economía", "negocios": "Economía",
             "política": "Política", "politica": "Política", "politics": "Política",
-            "deportes": "Deportes", "deporte": "Deportes", "sports": "Deportes",
-            "sociedad": "Sociedad", "social": "Sociedad",
-            "generales": "Sociedad",
+            "nacionales": "Política", "nación": "Política", "argentina": "Política", "mundo": "Política", "elecciones": "Política", "gobierno": "Política",
+            "deportes": "Deportes", "deporte": "Deportes", "sports": "Deportes", "futbol": "Deportes", "básquet": "Deportes",
+            "sociedad": "Sociedad", "social": "Sociedad", "generales": "Sociedad",
+            "espectaculos": "Sociedad", "espectáculos": "Sociedad", "tendencias": "Sociedad", "mujer": "Sociedad",
             "local": "Local", "ciudad": "Local", "la ciudad": "Local",
-            "necochea": "Local", "locales": "Local",
-            "zonales": "Local", "zona": "Local",
+            "necochea": "Local", "locales": "Local", "zonales": "Local", "zona": "Local",
+            "servicios": "Local", "tránsito": "Local",
             "salud": "Salud", "health": "Salud",
-            "educacion": "Educación", "educación": "Educación",
-            "cultura": "Cultura", "culture": "Cultura",
+            "educacion": "Educación", "educación": "Educación", "universidad": "Educación",
+            "cultura": "Cultura", "culture": "Cultura", "arte": "Cultura",
             "tecnologia": "Tecnología", "tecnología": "Tecnología",
-            "espectaculos": "Sociedad", "espectáculos": "Sociedad",
-            "tendencias": "Sociedad", "mujer": "Sociedad",
-            "nacionales": "Política", "nación": "Política",
-            "argentina": "Política", "mundo": "Política",
-            "campo": "Economía",
-            "servicios": "Local",
+            "obituarios": "Obituarios", "fúnebres": "Obituarios", "sepelios": "Obituarios",
+            "farmacias": "Farmacias", "turno": "Farmacias",
+            "clima": "Clima", "pronóstico": "Clima"
         }
         normalized = raw.strip().lower()
         for key, value in mapping.items():
@@ -498,9 +497,7 @@ class NewsScraper:
             "/wp-content/", "/feed/", "/page/", "#",
             "/publicidad/", "/aviso/", "/contacto/", "/quienes-somos/",
             "/politicas-de-privacidad/", "/seccion/", "/categoria/",
-            "/edicion-impresa", "/cdn-cgi/", "/ultimas-noticias/",
-            "avisos-funebres", "farmacias-de-turno", "obituarios",
-            "clima-en-necochea",
+            "/edicion-impresa", "/cdn-cgi/", "/ultimas-noticias/"
         ]
         return any(token in lowered for token in blocked_keywords)
 

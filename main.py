@@ -75,7 +75,7 @@ def _jaccard(a: set, b: set) -> float:
     return len(a & b) / len(a | b)
 
 
-def _group_by_similarity(notes: List[Dict], threshold: float = 0.55) -> List[List[Dict]]:
+def _group_by_similarity(notes: List[Dict], threshold: float = 0.65) -> List[List[Dict]]:
     """
     Agrupa noticias por similaridad de título usando Jaccard.
     Retorna lista de grupos (cada grupo = lista de noticias sobre el mismo evento).
@@ -107,7 +107,7 @@ def _group_by_similarity(notes: List[Dict], threshold: float = 0.55) -> List[Lis
 
 def pipeline() -> None:
     """Ejecuta el ciclo completo de scraping → dedup → IA → Supabase → Telegram."""
-    logger.info("═══ Iniciando pipeline Neco News v2.1 ═══")
+    logger.info("═══ Iniciando pipeline Neco News v2.2 ═══")
     try:
         supabase_client = SupabaseNewsClient()
         existing_urls = supabase_client.get_urls_existentes()
@@ -194,7 +194,11 @@ def pipeline() -> None:
             if not best_image:
                 best_image = scraper.get_wikimedia_image(title)
 
-            # Combinar textos de todas las fuentes
+            # Límite de cross-sourcing: tomar solo las 2 fuentes más extensas si hay muchas
+            if len(all_texts) > 2:
+                all_texts.sort(key=len, reverse=True)
+                all_texts = all_texts[:2]
+
             combined_content = "\n\n---\n\n".join(all_texts)
             num_sources = len(all_texts)
 
@@ -204,9 +208,10 @@ def pipeline() -> None:
                     num_sources, title[:60],
                 )
 
-            # Intentar reescribir con IA
+            # Intentar reescribir con IA (Bypass para servicios)
+            bypass_ai = section in ["Obituarios", "Farmacias", "Clima"]
             payload: Dict
-            if ai and not ai_failed:
+            if ai and not ai_failed and not bypass_ai:
                 try:
                     if num_sources > 1:
                         rewritten = ai.process_multi_source(title, all_texts, section)

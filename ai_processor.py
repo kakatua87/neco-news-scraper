@@ -65,7 +65,7 @@ MULTI_SOURCE_PROMPT = (
     "INSTRUCCIONES DE SÍNTESIS:\n"
     "1. Cruzá los datos de todas las versiones. Usá los hechos que se repiten (son más confiables).\n"
     "2. Incorporá los detalles únicos de cada versión que aporten valor informativo.\n"
-    "3. Si hay datos contradictorios, priorizá la versión más completa y precisa.\n"
+    "3. Si hay datos contradictorios (ej. diferencias en números, heridos o nombres), indicá la discrepancia de forma profesional (ej: 'reportes preliminares difieren en...') o utilizá el dato que tenga más contexto.\n"
     "4. NUNCA menciones las fuentes, medios o portales de donde proviene la información.\n"
     "5. La noticia resultante debe parecer 100% PROPIA y ORIGINAL de Neco News.\n\n"
     "ESTRUCTURA OBLIGATORIA DEL CUERPO (pirámide invertida):\n"

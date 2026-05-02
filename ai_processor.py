@@ -24,40 +24,34 @@ logger = logging.getLogger("neconews.ai")
 
 # ─── Prompt editorial ────────────────────────────────────────────
 
-SECCIONES_VALIDAS = [
-    "Policiales", "Economía", "Política", "Local",
-    "Deportes", "Sociedad", "Cultura", "Salud", "General"
-]
-
 SYSTEM_PROMPT = (
-    f"Sos el editor jefe de {config.PORTAL_NAME}, diario digital de Necochea, Argentina. "
-    "Tu tarea es redactar la versión definitiva de una noticia con rigor periodístico "
-    "y calidad editorial profesional.\n\n"
-    "REGLAS DE REDACCIÓN:\n"
-    "1. Usá estructura de pirámide invertida: lo más importante va en el primer párrafo.\n"
-    "2. El primer párrafo responde en máximo 3 líneas: ¿Qué? ¿Quién? ¿Cuándo? ¿Dónde?\n"
-    "3. El segundo párrafo desarrolla el contexto, detalles y datos relevantes.\n"
-    "4. El tercer párrafo incluye antecedentes, impacto local o proyección futura.\n"
-    "5. Usá datos concretos (cifras, fechas, nombres) cuando estén disponibles en el original.\n"
-    "6. Atribuí la información: 'según informó X', 'de acuerdo con Y', 'confirmaron fuentes'.\n"
-    "7. EVITÁ estas frases vacías: 'en ese marco', 'cabe destacar', 'en tal sentido', "
-    "'es importante mencionar', 'hay que señalar'.\n"
-    "8. Tono neutral, preciso, con vocabulario periodístico rioplatense. Sin sensacionalismo.\n"
-    "9. El título debe ser informativo y directo. Máximo 12 palabras. Sin clickbait.\n"
-    "10. El slug debe ser URL-friendly (sin tildes, sin espacios, separado por guiones).\n"
-    "11. Devolvé SOLO un JSON válido, sin markdown, sin comentarios, sin texto extra.\n\n"
-    "CLASIFICACIÓN DE SECCIÓN — elegí UNA de estas opciones según el tema principal:\n"
-    "Policiales | Economía | Política | Local | Deportes | Sociedad | Cultura | Salud | General\n\n"
+    f"Sos el redactor senior de {config.PORTAL_NAME}, diario digital de Necochea, Argentina. "
+    "Redactás con rigor periodístico y estilo limpio, sin sensacionalismo ni clickbait.\n\n"
+    "ESTRUCTURA OBLIGATORIA DEL CUERPO (pirámide invertida):\n"
+    "- Párrafo 1 (LEAD): Respondé las 5W en 2-3 oraciones densas: Qué ocurrió, Quién "
+    "está involucrado, Cuándo, Dónde y Por qué importa. Es el párrafo más importante.\n"
+    "- Párrafo 2 (DESARROLLO): Contexto, antecedentes y detalles que explican el hecho. "
+    "Podés incluir cifras, declaraciones relevantes o datos de fondo.\n"
+    "- Párrafo 3 (CIERRE): Impacto local concreto, próximos pasos o perspectiva que "
+    "le agrega valor al lector necochense.\n\n"
+    "REGLAS DE ESTILO:\n"
+    "1. Reescribí completamente. No copies frases del original.\n"
+    "2. Solo hechos objetivos y verificables. Sin opinión ni adjetivos valorativos.\n"
+    "3. Usá voz activa. Evitá construcciones pasivas innecesarias.\n"
+    "4. Tono: directo, preciso, adulto. Ni coloquial ni académico. Rioplatense natural.\n"
+    "5. El título describe el hecho con precisión (máx 80 caracteres). Sin signos de exclamación.\n"
+    "6. El slug debe ser URL-friendly (sin tildes, sin espacios, guiones, minúsculas).\n"
+    "7. Devolvé SOLO un JSON válido, sin markdown, sin comentarios, sin texto extra.\n\n"
     "Formato de respuesta (JSON):\n"
     "{\n"
-    '  "titulo": "Título periodístico, informativo, máximo 12 palabras",\n'
-    '  "cuerpo": "Párrafo 1 (qué/quién/cuándo/dónde)\\n\\nPárrafo 2 (contexto/detalles)\\n\\nPárrafo 3 (antecedentes/impacto)",\n'
-    '  "resumen_seo": "Bajada informativa de máximo 160 caracteres para Google",\n'
-    '  "seccion_sugerida": "Una de: Policiales|Economía|Política|Local|Deportes|Sociedad|Cultura|Salud|General",\n'
-    '  "instagram_text": "Texto para Instagram con emojis y tono dinámico (máx 2200 chars)",\n'
-    '  "twitter_text": "Tweet conciso con los datos clave (máx 280 chars)",\n'
-    '  "guion_video": "Guión narrado para video de 60 segundos, con presentador",\n'
-    '  "slug": "titulo-url-friendly-sin-tildes"\n'
+    '  "titulo": "Título periodístico preciso del hecho (máx 80 caracteres)",\n'
+    '  "cuerpo": "Párrafo lead\\n\\nPárrafo desarrollo\\n\\nPárrafo cierre",\n'
+    '  "resumen_seo": "Bajada de 150-160 caracteres para SEO: debe resumir el hecho central",\n'
+    '  "instagram_text": "Lead + contexto + 3-5 emojis relevantes al tema (máx 2200 chars)",\n'
+    '  "twitter_text": "Dato clave más importante + un hashtag local relevante (máx 280 chars)",\n'
+    '  "guion_video": "Guión de 45-60 seg: presentación del hecho, desarrollo, cierre a cámara",\n'
+    '  "slug": "titulo-url-friendly-sin-tildes",\n'
+    '  "seccion_sugerida": "Una de: Política, Economía, Policiales, Local, Deportes, Sociedad, Salud, Cultura"\n'
     "}"
 )
 
@@ -88,12 +82,11 @@ class AIProcessor:
     def process_article(self, titulo: str, cuerpo: str, seccion: str) -> Dict:
         """
         Reescribe una noticia usando IA.
-        Retorna dict con: titulo, cuerpo, resumen_seo, seccion_sugerida,
-        instagram_text, twitter_text, guion_video, slug.
+        Retorna dict con: titulo, cuerpo, resumen_seo, instagram_text, twitter_text, guion_video, slug.
         Lanza excepción si falla tras todos los reintentos.
         """
         user_prompt = (
-            f"Sección detectada por el scraper: {seccion}\n"
+            f"Sección: {seccion}\n"
             f"Título original: {titulo}\n"
             f"Cuerpo original:\n{cuerpo}\n"
         )
@@ -102,24 +95,16 @@ class AIProcessor:
         parsed = self._safe_json_parse(text)
 
         # Validar campos requeridos
-        required_fields = ["titulo", "cuerpo", "resumen_seo", "seccion_sugerida",
-                           "instagram_text", "twitter_text", "guion_video", "slug"]
+        required_fields = [
+            "titulo", "cuerpo", "resumen_seo",
+            "instagram_text", "twitter_text", "guion_video",
+            "slug", "seccion_sugerida",
+        ]
         missing = [f for f in required_fields if f not in parsed]
         if missing:
             raise ValueError(f"IA no devolvió campos requeridos: {', '.join(missing)}")
 
-        # Validar que seccion_sugerida sea una de las válidas
-        sec = parsed.get("seccion_sugerida", "").strip()
-        if sec not in SECCIONES_VALIDAS:
-            logger.warning(
-                "seccion_sugerida inválida '%s', usando sección del scraper: %s", sec, seccion
-            )
-            parsed["seccion_sugerida"] = seccion if seccion in SECCIONES_VALIDAS else "General"
-
-        logger.info(
-            "Artículo procesado OK | provider=%s | slug=%s | seccion_sugerida=%s",
-            self.provider, parsed.get("slug"), parsed.get("seccion_sugerida")
-        )
+        logger.info("Artículo procesado OK | provider=%s | slug=%s", self.provider, parsed.get("slug"))
         return parsed
 
     def _call_with_retry(self, user_prompt: str, max_retries: int = 3) -> str:
@@ -135,8 +120,8 @@ class AIProcessor:
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=0.7,
-                    max_tokens=2000,
+                    temperature=0.65,
+                    max_tokens=2500,
                 )
 
                 text = (response.choices[0].message.content or "").strip()

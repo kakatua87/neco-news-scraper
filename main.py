@@ -96,58 +96,57 @@ def pipeline() -> None:
             continue
 
         try:
-            # Extraer contenido completo
-            content = scraper.get_article_content(url)
+            # Extraer contenido completo + métadatos de imagen
+            article_data = scraper.get_article_content(url)
+            content = article_data["text"]
+            og_image = article_data.get("og_image")
+            content_image = article_data.get("content_image")
+
             if len(content) < 60:
                 logger.info("Nota descartada por cuerpo corto: %s", url)
                 continue
+
+            # Prioridad de imagen: OG > content_image > card_image > Wikimedia
+            best_image: str | None = og_image or content_image or image
+            imagen_fuente = "Fuente original"
+            if not best_image:
+                best_image = scraper.get_wikimedia_image(title)
+                if best_image:
+                    imagen_fuente = "Wikimedia Commons / Ilustrativa"
+            elif og_image:
+                imagen_fuente = fuente
 
             # Intentar reescribir con IA
             payload: Dict
             if ai and not ai_failed:
                 try:
                     rewritten = ai.process_article(title, content, section)
-
-                    # Lógica de sección: IA sugiere, scraper tiene prioridad si es específico
-                    seccion_final = section
-                    if section in ("General", "general", ""):
-                        # El scraper no detectó sección específica → usar la de la IA
-                        seccion_final = rewritten.get("seccion_sugerida", "General")
-                        logger.info(
-                            "Sección asignada por IA: %s (scraper devolvió 'General')",
-                            seccion_final,
-                        )
-                    else:
-                        logger.info(
-                            "Sección asignada por scraper: %s (IA sugirió: %s)",
-                            seccion_final,
-                            rewritten.get("seccion_sugerida", "—"),
-                        )
-
+                    # La IA puede sugerir una sección más precisa
+                    seccion_final = rewritten.get("seccion_sugerida") or section
                     payload = {
                         **rewritten,
                         "seccion": seccion_final,
                         "fuente": fuente,
                         "url_original": url,
-                        "imagen_url": image,
+                        "imagen_url": best_image,
+                        "imagen_fuente": imagen_fuente,
                     }
                 except Exception as ai_err:
                     logger.warning("IA falló para esta nota. Guardando cruda. Error: %s", str(ai_err)[:300])
-                    # Si es rate limit, desactivar IA para el resto de la corrida
                     err_str = str(ai_err).lower()
                     if "429" in err_str or "rate" in err_str or "limit" in err_str:
                         ai_failed = True
                         logger.warning("Rate limit detectado. IA desactivada para el resto de la corrida.")
-                    payload = _raw_payload(title, content, section, fuente, url, image)
+                    payload = _raw_payload(title, content, section, fuente, url, best_image, imagen_fuente)
             else:
-                # Sin IA: guardar nota cruda
-                payload = _raw_payload(title, content, section, fuente, url, image)
+                payload = _raw_payload(title, content, section, fuente, url, best_image, imagen_fuente)
 
             # Insertar en Supabase
             inserted = supabase_client.insert_noticia(payload)
             existing_urls.add(url)
             processed += 1
-            logger.info("Nota procesada: id=%s | slug=%s", inserted.get("id"), inserted.get("slug"))
+            logger.info("Nota procesada: id=%s | slug=%s | imagen_fuente=%s",
+                        inserted.get("id"), inserted.get("slug"), imagen_fuente)
 
             # Notificar por Telegram
             try:
@@ -164,7 +163,8 @@ def pipeline() -> None:
     logger.info("═══ Pipeline finalizado. Notas procesadas: %s ═══", processed)
 
 
-def _raw_payload(title: str, content: str, section: str, fuente: str, url: str, image: str | None) -> Dict:
+def _raw_payload(title: str, content: str, section: str, fuente: str,
+                  url: str, image: str | None, imagen_fuente: str = "Fuente original") -> Dict:
     """Construye payload sin reescritura IA."""
     return {
         "titulo": title,
@@ -174,6 +174,7 @@ def _raw_payload(title: str, content: str, section: str, fuente: str, url: str, 
         "fuente": fuente,
         "url_original": url,
         "imagen_url": image,
+        "imagen_fuente": imagen_fuente,
         "instagram_text": "",
         "twitter_text": "",
         "guion_video": "",

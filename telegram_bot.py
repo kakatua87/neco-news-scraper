@@ -37,15 +37,17 @@ class TelegramBotClient:
         primer_parrafo = cuerpo.split("\n\n")[0][:600]
         instagram_preview = (noticia.get("instagram_text") or "")[:250]
         fuente = noticia.get("fuente", "")
+        imagen_fuente = noticia.get("imagen_fuente", "")
         noticia_id = noticia.get("id")
+        seccion = noticia.get("seccion", "General")
 
         if noticia_id is None:
             raise ValueError("La noticia debe contener 'id' para construir callbacks.")
 
-        # Construir mensaje sin parse_mode para evitar errores
         lines = [
             f"📰 NUEVA NOTICIA PENDIENTE",
             f"",
+            f"📂 Sección sugerida: {seccion}",
             f"Título: {titulo}",
             f"",
             f"Primer párrafo:",
@@ -57,6 +59,12 @@ class TelegramBotClient:
 
         if fuente:
             lines.extend(["", f"📌 Fuente: {fuente}"])
+
+        # Atribución de imagen
+        if imagen_fuente and "Ilustrativa" in imagen_fuente:
+            lines.extend(["", f"📷 Imagen: Wikimedia Commons (ilustrativa)"])
+        elif imagen_fuente and imagen_fuente not in ("Fuente original", ""):
+            lines.extend(["", f"📷 Imagen: {imagen_fuente}"])
 
         lines.extend(["", f"🔗 Editar: {config.ADMIN_URL}"])
 
@@ -82,6 +90,7 @@ class TelegramBotClient:
             self._send_message(text, keyboard)
 
         logger.info("Preview enviada a Telegram para noticia id=%s", noticia_id)
+
 
     def _send_message(self, text: str, keyboard: Dict) -> None:
         """Envía un mensaje de texto con botones inline."""

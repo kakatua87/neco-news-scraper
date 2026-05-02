@@ -1,0 +1,15 @@
+﻿{
+  "update_id": 12345,
+  "callback_query": {
+    "id": "4382bfdwqe3",
+    "from": {"id": 111, "is_bot": false, "first_name": "Test"},
+    "message": {
+      "message_id": 112,
+      "chat": {"id": 1798737756, "type": "private"},
+      "date": 1234567,
+      "text": "Prueba"
+    },
+    "chat_instance": "432432",
+    "data": "pub_fake-id-123"
+  }
+}

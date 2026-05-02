@@ -12,8 +12,9 @@ Selectores específicos por dominio para máxima calidad de contenido.
 import logging
 import re
 from typing import Dict, List, Optional, Set, Tuple
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, quote
 
+import httpx
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
@@ -74,8 +75,11 @@ class NewsScraper:
             fuente="Diario Necochea",
         )
 
-    def get_article_content(self, url: str) -> str:
-        """Extrae el cuerpo completo de una nota individual con selectores por dominio."""
+    def get_article_content(self, url: str) -> Dict:
+        """
+        Extrae el cuerpo completo y metadatos de imagen de una nota individual.
+        Retorna dict: {"text": str, "og_image": str|None, "content_image": str|None}
+        """
         logger.info("Extrayendo cuerpo completo: %s", url)
         domain = self._get_domain(url)
 
@@ -86,9 +90,42 @@ class NewsScraper:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(1500)
                 html = page.content()
-                return self._extract_article_text(html, domain=domain)
+                text = self._extract_article_text(html, domain=domain)
+                og_image = self._extract_og_image(html, url)
+                content_image = self._extract_content_image(html, domain, url)
+                return {"text": text, "og_image": og_image, "content_image": content_image}
             finally:
                 browser.close()
+
+    @staticmethod
+    def get_wikimedia_image(query: str) -> Optional[str]:
+        """
+        Busca una imagen ilustrativa en Wikimedia Commons via Wikipedia REST API.
+        Retorna la URL de la imagen o None si no encuentra nada relevante.
+        """
+        try:
+            # Tomar las 3 palabras más representativas del query
+            stopwords = {"el", "la", "los", "las", "de", "del", "en", "un", "una",
+                         "y", "a", "que", "se", "con", "por", "es", "su", "al",
+                         "lo", "le", "esta", "este", "son", "ha", "fue"}
+            tokens = [t for t in re.sub(r"[^a-záéíóúñ\ ]", "", query.lower()).split()
+                      if t not in stopwords and len(t) > 3]
+            if not tokens:
+                return None
+            search_term = " ".join(tokens[:3])
+            encoded = quote(search_term)
+            url = f"https://es.wikipedia.org/api/rest_v1/page/summary/{encoded}"
+            resp = httpx.get(url, timeout=8, follow_redirects=True)
+            if resp.status_code == 200:
+                data = resp.json()
+                # Preferir thumbnail de Wikipedia (suele ser de Commons)
+                thumb = data.get("thumbnail", {}).get("source")
+                if thumb:
+                    logger.info("Wikimedia image encontrada para '%s': %s", search_term, thumb)
+                    return thumb
+        except Exception as e:
+            logger.debug("Wikimedia image fallback falló para '%s': %s", query, e)
+        return None
 
     def _scrape_homepage(
         self,
@@ -207,6 +244,50 @@ class NewsScraper:
                 )
                 if raw and not raw.startswith("data:"):
                     return urljoin(base_url, raw)
+        return None
+
+    @staticmethod
+    def _extract_og_image(html: str, base_url: str) -> Optional[str]:
+        """Extrae la imagen Open Graph del HTML (la imagen principal del artículo)."""
+        soup = BeautifulSoup(html, "html.parser")
+        for selector in [
+            'meta[property="og:image"]',
+            'meta[name="twitter:image"]',
+            'meta[property="og:image:secure_url"]',
+        ]:
+            tag = soup.select_one(selector)
+            if tag:
+                src = (tag.get("content") or "").strip()
+                if src and src.startswith("http") and not src.startswith("data:"):
+                    return src
+        return None
+
+    @classmethod
+    def _extract_content_image(cls, html: str, domain: str, base_url: str) -> Optional[str]:
+        """Extrae la primera imagen significativa dentro del cuerpo del artículo."""
+        soup = BeautifulSoup(html, "html.parser")
+        domain_selectors = DOMAIN_CONTENT_SELECTORS.get(domain, [])
+        all_selectors = domain_selectors + ["article", ".entry-content", ".post-content"]
+
+        for sel in all_selectors:
+            node = soup.select_one(sel)
+            if not node:
+                continue
+            for img in node.select("img"):
+                src = (
+                    img.get("src") or img.get("data-src")
+                    or img.get("data-lazy-src") or ""
+                ).strip()
+                if not src or src.startswith("data:"):
+                    continue
+                # Ignorar imágenes muy pequeñas (iconos, avatares)
+                width = img.get("width", "999")
+                try:
+                    if int(str(width)) < 200:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+                return urljoin(base_url, src)
         return None
 
     @classmethod

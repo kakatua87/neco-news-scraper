@@ -4,6 +4,10 @@ Scraper de noticias para portales de Necochea.
 Fuentes soportadas:
   - nden.com.ar
   - diarionecochea.com
+  - diario4v.com
+  - tsnnecochea.com.ar
+  - diarionq.com.ar
+  - elecos.com.ar
 
 Usa Playwright headless + BeautifulSoup para extracción robusta.
 Selectores específicos por dominio para máxima calidad de contenido.
@@ -40,6 +44,34 @@ DOMAIN_CONTENT_SELECTORS: Dict[str, List[str]] = {
         "div.post-content",
         "article",
     ],
+    "diario4v.com": [
+        "div.entry-content",
+        "div.td-post-content",
+        "div.post-content",
+        "article .entry-content",
+        "article",
+    ],
+    "tsnnecochea.com.ar": [
+        "div.entry-content",
+        "div.single-content",
+        "div.post-content",
+        "article .entry-content",
+        "article",
+    ],
+    "diarionq.com.ar": [
+        "div.entry-content",
+        "div.post-content",
+        "div.single-content",
+        "article .entry-content",
+        "article",
+    ],
+    "elecos.com.ar": [
+        "div.article-body",
+        "div.entry-content",
+        "article .content",
+        "main article",
+        "article",
+    ],
 }
 
 
@@ -73,6 +105,62 @@ class NewsScraper:
             image_selector="img",
             section_selector=".category, .seccion, .tag, .post-category",
             fuente="Diario Necochea",
+        )
+
+    def scrape_diario4v(self) -> List[Dict]:
+        """Scrapea la homepage de Diario Cuatro Vientos."""
+        base_url = "https://www.diario4v.com"
+        logger.info("Scrapeando homepage Diario 4V...")
+        return self._scrape_homepage(
+            base_url=base_url,
+            card_selector="article, .post, .entry, .td_module_wrap",
+            title_selector="h2 a, h3 a, h2, h3",
+            link_selector="h2 a, h3 a, a",
+            image_selector="img.entry-thumb, img.wp-post-image, img",
+            section_selector=".td-post-category, .category, .seccion",
+            fuente="Diario 4V",
+        )
+
+    def scrape_tsn(self) -> List[Dict]:
+        """Scrapea la homepage de TSN Necochea."""
+        base_url = "https://tsnnecochea.com.ar"
+        logger.info("Scrapeando homepage TSN Necochea...")
+        return self._scrape_homepage(
+            base_url=base_url,
+            card_selector="article, .post, .entry, .item",
+            title_selector="h3 a, h2 a, h3, h2",
+            link_selector="h3 a, h2 a, a",
+            image_selector="img.wp-post-image, img.attachment-post-thumbnail, img",
+            section_selector=".category, .post-category, .seccion",
+            fuente="TSN Necochea",
+        )
+
+    def scrape_diarionq(self) -> List[Dict]:
+        """Scrapea la homepage de Diario NQ."""
+        base_url = "https://diarionq.com.ar"
+        logger.info("Scrapeando homepage Diario NQ...")
+        return self._scrape_homepage(
+            base_url=base_url,
+            card_selector="article, .post, .entry, .td_module_wrap",
+            title_selector="h3 a, h1 a, h2 a, h3, h1",
+            link_selector="h3 a, h1 a, a",
+            image_selector="img.wp-post-image, img.attachment-post-thumbnail, img",
+            section_selector=".category, .post-category, .cat-links a",
+            fuente="Diario NQ",
+        )
+
+    def scrape_elecos(self) -> List[Dict]:
+        """Scrapea la homepage de Ecos Diarios."""
+        base_url = "https://elecos.com.ar"
+        logger.info("Scrapeando homepage El Ecos...")
+        return self._scrape_homepage(
+            base_url=base_url,
+            card_selector="article, .post, .entry, a[href*='elecos.com.ar/']",
+            title_selector="h2 a, h3 a, h2, h3",
+            link_selector="h2 a, h3 a, a",
+            image_selector="img",
+            section_selector=".category, .post-category, a[href*='categoria']",
+            fuente="El Ecos",
         )
 
     def get_article_content(self, url: str) -> Dict:
@@ -376,15 +464,25 @@ class NewsScraper:
         """Normaliza el nombre de la sección."""
         mapping = {
             "policiales": "Policiales", "policial": "Policiales",
+            "seguridad": "Policiales",
             "economia": "Economía", "economía": "Economía", "economic": "Economía",
             "política": "Política", "politica": "Política", "politics": "Política",
             "deportes": "Deportes", "deporte": "Deportes", "sports": "Deportes",
             "sociedad": "Sociedad", "social": "Sociedad",
-            "local": "Local", "ciudad": "Local",
+            "generales": "Sociedad",
+            "local": "Local", "ciudad": "Local", "la ciudad": "Local",
+            "necochea": "Local", "locales": "Local",
+            "zonales": "Local", "zona": "Local",
             "salud": "Salud", "health": "Salud",
             "educacion": "Educación", "educación": "Educación",
             "cultura": "Cultura", "culture": "Cultura",
             "tecnologia": "Tecnología", "tecnología": "Tecnología",
+            "espectaculos": "Sociedad", "espectáculos": "Sociedad",
+            "tendencias": "Sociedad", "mujer": "Sociedad",
+            "nacionales": "Política", "nación": "Política",
+            "argentina": "Política", "mundo": "Política",
+            "campo": "Economía",
+            "servicios": "Local",
         }
         normalized = raw.strip().lower()
         for key, value in mapping.items():
@@ -399,6 +497,10 @@ class NewsScraper:
             "/video/", "/category/", "/tag/", "/author/",
             "/wp-content/", "/feed/", "/page/", "#",
             "/publicidad/", "/aviso/", "/contacto/", "/quienes-somos/",
+            "/politicas-de-privacidad/", "/seccion/", "/categoria/",
+            "/edicion-impresa", "/cdn-cgi/", "/ultimas-noticias/",
+            "avisos-funebres", "farmacias-de-turno", "obituarios",
+            "clima-en-necochea",
         ]
         return any(token in lowered for token in blocked_keywords)
 

@@ -73,7 +73,14 @@ def pipeline() -> None:
 
     # ─── Scraping ────────────────────────────────────────────────
     raw_notes: List[Dict] = []
-    for source_fn in (scraper.scrape_nden, scraper.scrape_diario_necochea):
+    for source_fn in (
+        scraper.scrape_nden,
+        scraper.scrape_diario_necochea,
+        scraper.scrape_diario4v,
+        scraper.scrape_tsn,
+        scraper.scrape_diarionq,
+        scraper.scrape_elecos,
+    ):
         try:
             raw_notes.extend(source_fn())
         except Exception:

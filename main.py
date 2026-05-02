@@ -1,7 +1,7 @@
 """
 Neco News — Pipeline principal de scraping y publicación.
 
-Flujo: Scrape → IA reescribe → Supabase → Telegram notifica
+Flujo: Scrape → Deduplicación → IA sintetiza → Supabase → Telegram notifica
 Scheduler: cada N minutos (configurable)
 API: FastAPI con /health y /telegram/callback
 """
@@ -11,7 +11,7 @@ import logging
 import re
 import sys
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -33,7 +33,7 @@ if not logging.getLogger().handlers:
 logger = logging.getLogger("neconews.pipeline")
 
 # ─── FastAPI ─────────────────────────────────────────────────────
-app = FastAPI(title="Neco News Scraper", version="2.0.0")
+app = FastAPI(title="Neco News Scraper", version="2.1.0")
 scheduler = BackgroundScheduler(timezone="America/Argentina/Buenos_Aires")
 
 
@@ -52,9 +52,62 @@ def slug_from_url(url: str, fallback_title: str) -> str:
     return base or "nota"
 
 
+# ─── Deduplicación semántica por título ──────────────────────────
+
+_STOPWORDS = frozenset({
+    "el", "la", "los", "las", "de", "del", "en", "un", "una", "y", "a", "que",
+    "se", "con", "por", "es", "su", "al", "lo", "le", "esta", "este", "son",
+    "ha", "fue", "para", "como", "más", "no", "ya", "sin", "ante", "sobre",
+    "pero", "sus", "muy", "ser", "hasta", "hay", "entre",
+})
+
+
+def _normalize_title(title: str) -> set:
+    """Convierte un título en un conjunto de tokens normalizados."""
+    clean = re.sub(r"[^a-záéíóúüñ\s]", "", title.lower())
+    return {t for t in clean.split() if t not in _STOPWORDS and len(t) > 2}
+
+
+def _jaccard(a: set, b: set) -> float:
+    """Similaridad de Jaccard entre dos conjuntos de tokens."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _group_by_similarity(notes: List[Dict], threshold: float = 0.55) -> List[List[Dict]]:
+    """
+    Agrupa noticias por similaridad de título usando Jaccard.
+    Retorna lista de grupos (cada grupo = lista de noticias sobre el mismo evento).
+    """
+    groups: List[List[Dict]] = []
+    used = set()
+
+    # Pre-calcular tokens de cada título
+    tokens = [_normalize_title(n.get("titulo", "")) for n in notes]
+
+    for i, note in enumerate(notes):
+        if i in used:
+            continue
+        group = [note]
+        used.add(i)
+
+        for j in range(i + 1, len(notes)):
+            if j in used:
+                continue
+            sim = _jaccard(tokens[i], tokens[j])
+            if sim >= threshold:
+                group.append(notes[j])
+                used.add(j)
+
+        groups.append(group)
+
+    return groups
+
+
 def pipeline() -> None:
-    """Ejecuta el ciclo completo de scraping → IA → Supabase → Telegram."""
-    logger.info("═══ Iniciando pipeline Neco News ═══")
+    """Ejecuta el ciclo completo de scraping → dedup → IA → Supabase → Telegram."""
+    logger.info("═══ Iniciando pipeline Neco News v2.1 ═══")
     try:
         supabase_client = SupabaseNewsClient()
         existing_urls = supabase_client.get_urls_existentes()
@@ -88,100 +141,130 @@ def pipeline() -> None:
 
     logger.info("Total de notas candidatas: %s", len(raw_notes))
 
-    # ─── Procesamiento ───────────────────────────────────────────
+    # ─── Deduplicación: agrupar noticias similares ───────────────
+    groups = _group_by_similarity(raw_notes)
+    logger.info("Grupos tras deduplicación: %s (de %s notas)", len(groups), len(raw_notes))
+
+    # ─── Procesamiento por grupo ─────────────────────────────────
     processed = 0
     ai_failed = False
 
-    for note in raw_notes[:config.MAX_NOTES_PER_RUN]:
-        url = note.get("url")
-        title = note.get("titulo", "")
-        section = note.get("seccion", "General")
-        fuente = note.get("fuente", "Neco News")
-        image = note.get("imagen_url")
+    for group in groups[:config.MAX_NOTES_PER_RUN]:
+        # Elegir la nota "líder" (primera del grupo)
+        leader = group[0]
+        urls = [n["url"] for n in group if n.get("url")]
+        title = leader.get("titulo", "")
+        section = leader.get("seccion", "General")
+        image = leader.get("imagen_url")
 
-        if not url or url in existing_urls:
+        # Si todas las URLs ya están procesadas, skip
+        if all(u in existing_urls for u in urls):
             continue
+        primary_url = next((u for u in urls if u not in existing_urls), urls[0])
 
         try:
-            # Extraer contenido completo + métadatos de imagen
-            article_data = scraper.get_article_content(url)
-            content = article_data["text"]
-            og_image = article_data.get("og_image")
-            content_image = article_data.get("content_image")
+            # Extraer contenido de cada fuente del grupo
+            all_texts: List[str] = []
+            best_image: Optional[str] = None
 
-            if len(content) < 60:
-                logger.info("Nota descartada por cuerpo corto: %s", url)
+            for note in group:
+                note_url = note.get("url")
+                if not note_url:
+                    continue
+                try:
+                    article_data = scraper.get_article_content(note_url)
+                    text = article_data.get("text", "")
+                    if len(text) >= 60:
+                        all_texts.append(text)
+                    # Buscar la mejor imagen entre todas las fuentes
+                    if not best_image:
+                        best_image = (
+                            article_data.get("og_image")
+                            or article_data.get("content_image")
+                            or note.get("imagen_url")
+                        )
+                except Exception:
+                    logger.debug("No se pudo extraer contenido de %s", note_url)
+
+            if not all_texts:
+                logger.info("Grupo descartado: sin contenido suficiente | título=%s", title)
                 continue
 
-            # Prioridad de imagen: OG > content_image > card_image > Wikimedia
-            best_image: str | None = og_image or content_image or image
-            imagen_fuente = "Fuente original"
+            # Fallback de imagen: Wikimedia
             if not best_image:
                 best_image = scraper.get_wikimedia_image(title)
-                if best_image:
-                    imagen_fuente = "Wikimedia Commons / Ilustrativa"
-            elif og_image:
-                imagen_fuente = fuente
+
+            # Combinar textos de todas las fuentes
+            combined_content = "\n\n---\n\n".join(all_texts)
+            num_sources = len(all_texts)
+
+            if num_sources > 1:
+                logger.info(
+                    "Cross-sourcing: %s fuentes agrupadas para '%s'",
+                    num_sources, title[:60],
+                )
 
             # Intentar reescribir con IA
             payload: Dict
             if ai and not ai_failed:
                 try:
-                    rewritten = ai.process_article(title, content, section)
-                    # La IA puede sugerir una sección más precisa
+                    if num_sources > 1:
+                        rewritten = ai.process_multi_source(title, all_texts, section)
+                    else:
+                        rewritten = ai.process_article(title, combined_content, section)
                     seccion_final = rewritten.get("seccion_sugerida") or section
                     payload = {
                         **rewritten,
                         "seccion": seccion_final,
-                        "fuente": fuente,
-                        "url_original": url,
+                        "url_original": primary_url,
                         "imagen_url": best_image,
-                        "imagen_fuente": imagen_fuente,
                     }
                 except Exception as ai_err:
-                    logger.warning("IA falló para esta nota. Guardando cruda. Error: %s", str(ai_err)[:300])
+                    logger.warning("IA falló. Guardando cruda. Error: %s", str(ai_err)[:300])
                     err_str = str(ai_err).lower()
                     if "429" in err_str or "rate" in err_str or "limit" in err_str:
                         ai_failed = True
-                        logger.warning("Rate limit detectado. IA desactivada para el resto de la corrida.")
-                    payload = _raw_payload(title, content, section, fuente, url, best_image, imagen_fuente)
+                        logger.warning("Rate limit detectado. IA desactivada para el resto.")
+                    payload = _raw_payload(title, combined_content, section, primary_url, best_image)
             else:
-                payload = _raw_payload(title, content, section, fuente, url, best_image, imagen_fuente)
+                payload = _raw_payload(title, combined_content, section, primary_url, best_image)
 
             # Insertar en Supabase
             inserted = supabase_client.insert_noticia(payload)
-            existing_urls.add(url)
+            # Marcar todas las URLs del grupo como procesadas
+            for u in urls:
+                existing_urls.add(u)
             processed += 1
-            logger.info("Nota procesada: id=%s | slug=%s | imagen_fuente=%s",
-                        inserted.get("id"), inserted.get("slug"), imagen_fuente)
+            logger.info(
+                "Nota procesada: id=%s | slug=%s | fuentes=%s",
+                inserted.get("id"), inserted.get("slug"), num_sources,
+            )
 
             # Notificar por Telegram
             try:
                 telegram.send_preview(inserted)
             except Exception:
-                logger.exception("No se pudo enviar preview a Telegram para noticia id=%s", inserted.get("id"))
+                logger.exception("No se pudo enviar preview a Telegram para id=%s", inserted.get("id"))
 
             # Delay entre notas (respetar rate limits)
             time.sleep(config.AI_DELAY_SECONDS)
 
         except Exception:
-            logger.exception("Fallo procesando nota url=%s. Se continúa con la siguiente.", url)
+            logger.exception("Fallo procesando grupo url=%s.", primary_url)
 
     logger.info("═══ Pipeline finalizado. Notas procesadas: %s ═══", processed)
 
 
-def _raw_payload(title: str, content: str, section: str, fuente: str,
-                  url: str, image: str | None, imagen_fuente: str = "Fuente original") -> Dict:
+def _raw_payload(title: str, content: str, section: str,
+                  url: str, image: str | None) -> Dict:
     """Construye payload sin reescritura IA."""
     return {
         "titulo": title,
         "cuerpo": content,
         "resumen_seo": "",
         "seccion": section,
-        "fuente": fuente,
         "url_original": url,
         "imagen_url": image,
-        "imagen_fuente": imagen_fuente,
         "instagram_text": "",
         "twitter_text": "",
         "guion_video": "",

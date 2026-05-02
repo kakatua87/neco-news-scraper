@@ -36,8 +36,6 @@ class TelegramBotClient:
         cuerpo = noticia.get("cuerpo", "")
         primer_parrafo = cuerpo.split("\n\n")[0][:600]
         instagram_preview = (noticia.get("instagram_text") or "")[:250]
-        fuente = noticia.get("fuente", "")
-        imagen_fuente = noticia.get("imagen_fuente", "")
         noticia_id = noticia.get("id")
         seccion = noticia.get("seccion", "General")
 
@@ -56,15 +54,6 @@ class TelegramBotClient:
 
         if instagram_preview:
             lines.extend(["", f"📱 Instagram:", f"{instagram_preview}"])
-
-        if fuente:
-            lines.extend(["", f"📌 Fuente: {fuente}"])
-
-        # Atribución de imagen
-        if imagen_fuente and "Ilustrativa" in imagen_fuente:
-            lines.extend(["", f"📷 Imagen: Wikimedia Commons (ilustrativa)"])
-        elif imagen_fuente and imagen_fuente not in ("Fuente original", ""):
-            lines.extend(["", f"📷 Imagen: {imagen_fuente}"])
 
         lines.extend(["", f"🔗 Editar: {config.ADMIN_URL}"])
 

@@ -21,6 +21,7 @@ import uvicorn
 import config
 from ai_processor import AIProcessor
 from scraper import NewsScraper
+from services_scraper import ServicesScraper
 from supabase_client import SupabaseNewsClient
 from telegram_bot import TelegramBotClient
 
@@ -341,9 +342,26 @@ def on_startup() -> None:
         id="news_pipeline",
         replace_existing=True,
     )
+    
+    # Scraper de servicios diario a las 7:00 AM
+    def update_services_job():
+        try:
+            ServicesScraper().update_services()
+        except Exception as e:
+            logger.error("Error en update_services_job: %s", e)
+            
+    scheduler.add_job(
+        update_services_job,
+        trigger="cron",
+        hour=7,
+        minute=0,
+        id="services_pipeline",
+        replace_existing=True,
+    )
+    
     scheduler.start()
     logger.info(
-        "Scheduler iniciado. Pipeline cada %s minutos.",
+        "Scheduler iniciado. Pipeline de noticias cada %s minutos. Pipeline de servicios diario a las 07:00.",
         config.SCHEDULER_INTERVAL_MINUTES,
     )
 

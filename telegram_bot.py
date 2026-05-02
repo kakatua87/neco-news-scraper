@@ -72,12 +72,29 @@ class TelegramBotClient:
 
         keyboard = {
             "inline_keyboard": [
+                # Fila 1: Acción principal
                 [
                     {"text": "✅ Publicar", "callback_data": f"pub_{noticia_id}"},
                     {"text": "❌ Descartar", "callback_data": f"des_{noticia_id}"},
                 ],
+                # Fila 2: Sección (primera mitad)
                 [
-                    {"text": "✏️ Editar en panel", "url": config.ADMIN_URL},
+                    {"text": "💼 Política", "callback_data": f"sec_{noticia_id}_Política"},
+                    {"text": "💹 Economía", "callback_data": f"sec_{noticia_id}_Economía"},
+                    {"text": "🚨 Policiales", "callback_data": f"sec_{noticia_id}_Policiales"},
+                    {"text": "📍 Local", "callback_data": f"sec_{noticia_id}_Local"},
+                ],
+                # Fila 3: Sección (segunda mitad)
+                [
+                    {"text": "⚽ Deportes", "callback_data": f"sec_{noticia_id}_Deportes"},
+                    {"text": "👥 Sociedad", "callback_data": f"sec_{noticia_id}_Sociedad"},
+                    {"text": "🎨 Cultura", "callback_data": f"sec_{noticia_id}_Cultura"},
+                    {"text": "⚕️ Salud", "callback_data": f"sec_{noticia_id}_Salud"},
+                ],
+                # Fila 4: Portada y edición
+                [
+                    {"text": "⭐ Hacer portada del día", "callback_data": f"portada_{noticia_id}"},
+                    {"text": "✏️ Panel", "url": config.ADMIN_URL},
                 ],
             ]
         }
@@ -149,37 +166,57 @@ class TelegramBotClient:
                 except Exception:
                     pass
 
-        action, _, raw_id = callback_data.partition("_")
-        if not raw_id:
-            return {"ok": False, "error": "id inválido"}
+        # Parsear acción: formatos son pub_ID, des_ID, sec_ID_SECCION, portada_ID
+        parts = callback_data.split("_", 2)
+        action = parts[0] if parts else ""
 
-        noticia_id = raw_id
-        estado_final = ""
         mensaje_estado = ""
-        
+        estado_final = ""
+        response_data: Dict = {"ok": True}
+
         if action == "pub":
+            noticia_id = parts[1] if len(parts) > 1 else ""
             self.supabase_client.update_estado(noticia_id, "publicada")
             estado_final = "publicada"
             mensaje_estado = "✅ PUBLICADA"
+            response_data = {"ok": True, "id": noticia_id, "estado": estado_final}
+
         elif action == "des":
+            noticia_id = parts[1] if len(parts) > 1 else ""
             self.supabase_client.update_estado(noticia_id, "descartada")
             estado_final = "descartada"
             mensaje_estado = "❌ DESCARTADA"
+            response_data = {"ok": True, "id": noticia_id, "estado": estado_final}
+
+        elif action == "sec":
+            # formato: sec_ID_NombreSeccion
+            noticia_id = parts[1] if len(parts) > 1 else ""
+            nueva_seccion = parts[2] if len(parts) > 2 else "General"
+            self.supabase_client.update_seccion(noticia_id, nueva_seccion)
+            mensaje_estado = f"📂 SECCIÓN: {nueva_seccion.upper()}"
+            response_data = {"ok": True, "id": noticia_id, "seccion": nueva_seccion}
+
+        elif action == "portada":
+            noticia_id = parts[1] if len(parts) > 1 else ""
+            self.supabase_client.update_portada(noticia_id)
+            mensaje_estado = "⭐ PORTADA DEL DÍA"
+            response_data = {"ok": True, "id": noticia_id, "es_portada": True}
+
         else:
             return {"ok": False, "error": "acción no soportada"}
 
-        # Editar el mensaje para quitar los botones y agregar el estado
-        if message_id and chat_id:
+        # Editar el mensaje para reflejar el cambio
+        if message_id and chat_id and mensaje_estado:
             is_photo = "photo" in message
             original_text = message.get("caption") if is_photo else message.get("text")
             original_text = original_text or ""
-            
             new_text = f"[{mensaje_estado}]\n\n{original_text}"
-            
+
             payload = {
                 "chat_id": chat_id,
                 "message_id": message_id,
-                "reply_markup": json.dumps({"inline_keyboard": []})  # Quitar botones
+                # Solo quitar botones si es acción definitiva (pub/des)
+                "reply_markup": json.dumps({"inline_keyboard": []}) if action in ("pub", "des") else json.dumps({"inline_keyboard": []}),
             }
             if is_photo:
                 payload["caption"] = new_text[:1024]
@@ -187,11 +224,11 @@ class TelegramBotClient:
             else:
                 payload["text"] = new_text[:4096]
                 endpoint = "/editMessageText"
-                
+
             with httpx.Client(timeout=20) as client:
                 try:
                     client.post(f"{self.base_url}{endpoint}", data=payload)
                 except Exception as e:
                     logger.warning("No se pudo editar mensaje de Telegram: %s", e)
 
-        return {"ok": True, "id": noticia_id, "estado": estado_final}
+        return response_data

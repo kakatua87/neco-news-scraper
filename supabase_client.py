@@ -49,10 +49,12 @@ class SupabaseNewsClient:
             "fuente": datos.get("fuente", "Neco News"),
             "url_original": datos.get("url_original"),
             "imagen_url": datos.get("imagen_url"),
+            "imagen_fuente": datos.get("imagen_fuente", "Fuente original"),
             "instagram_text": datos.get("instagram_text"),
             "twitter_text": datos.get("twitter_text"),
             "guion_video": datos.get("guion_video"),
             "slug": datos.get("slug", "").strip(),
+            "es_portada": False,
         }
         response = self.client.table("noticias").insert(payload).execute()
         rows = response.data or []
@@ -66,6 +68,31 @@ class SupabaseNewsClient:
         if estado == "publicada":
             update_data["fecha_publicacion"] = datetime.now(timezone.utc).isoformat()
         self.client.table("noticias").update(update_data).eq("id", noticia_id).execute()
+
+    def update_seccion(self, noticia_id: str, nueva_seccion: str) -> None:
+        """Actualiza la sección de una noticia desde Telegram."""
+        self.client.table("noticias").update({"seccion": nueva_seccion}).eq("id", noticia_id).execute()
+        logger.info("Sección actualizada: id=%s → %s", noticia_id, nueva_seccion)
+
+    def update_portada(self, noticia_id: str) -> None:
+        """
+        Marca una noticia como portada del día.
+        Primero quita la portada de todas las del día de hoy,
+        luego marca la indicada.
+        """
+        try:
+            hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            # Quitar portada del día actual
+            self.client.table("noticias") \
+                .update({"es_portada": False}) \
+                .gte("fecha_publicacion", f"{hoy}T00:00:00Z") \
+                .lte("fecha_publicacion", f"{hoy}T23:59:59Z") \
+                .execute()
+            # Marcar la nueva portada
+            self.client.table("noticias").update({"es_portada": True}).eq("id", noticia_id).execute()
+            logger.info("Portada del día actualizada: id=%s", noticia_id)
+        except Exception:
+            logger.exception("Error actualizando portada para id=%s", noticia_id)
 
     def get_stats(self) -> Dict:
         """Obtiene estadísticas para el dashboard."""

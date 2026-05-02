@@ -107,9 +107,26 @@ def pipeline() -> None:
             if ai and not ai_failed:
                 try:
                     rewritten = ai.process_article(title, content, section)
+
+                    # Lógica de sección: IA sugiere, scraper tiene prioridad si es específico
+                    seccion_final = section
+                    if section in ("General", "general", ""):
+                        # El scraper no detectó sección específica → usar la de la IA
+                        seccion_final = rewritten.get("seccion_sugerida", "General")
+                        logger.info(
+                            "Sección asignada por IA: %s (scraper devolvió 'General')",
+                            seccion_final,
+                        )
+                    else:
+                        logger.info(
+                            "Sección asignada por scraper: %s (IA sugirió: %s)",
+                            seccion_final,
+                            rewritten.get("seccion_sugerida", "—"),
+                        )
+
                     payload = {
                         **rewritten,
-                        "seccion": section,
+                        "seccion": seccion_final,
                         "fuente": fuente,
                         "url_original": url,
                         "imagen_url": image,

@@ -14,7 +14,7 @@ import json
 import logging
 import re
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 from openai import OpenAI, APIError, RateLimitError, APIConnectionError
 

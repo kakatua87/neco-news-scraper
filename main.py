@@ -322,12 +322,22 @@ async def telegram_callback(request: Request) -> Dict:
 
 @app.post("/run")
 async def manual_run() -> Dict:
-    """Ejecuta el pipeline manualmente (para debug)."""
+    """Ejecuta el pipeline de noticias manualmente (para debug)."""
     try:
         pipeline()
-        return {"ok": True, "message": "Pipeline ejecutado"}
+        return {"ok": True, "message": "Pipeline de noticias ejecutado"}
     except Exception as e:
-        logger.exception("Error en ejecución manual.")
+        logger.exception("Error en ejecución manual de noticias.")
+        return {"ok": False, "error": str(e)}
+
+@app.post("/run-services")
+async def manual_run_services() -> Dict:
+    """Ejecuta el pipeline de servicios manualmente."""
+    try:
+        ServicesScraper().update_services()
+        return {"ok": True, "message": "Pipeline de servicios ejecutado"}
+    except Exception as e:
+        logger.exception("Error en ejecución manual de servicios.")
         return {"ok": False, "error": str(e)}
 
 

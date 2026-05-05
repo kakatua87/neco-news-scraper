@@ -14,6 +14,8 @@ import time
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
+import requests
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
 import uvicorn
@@ -310,10 +312,32 @@ async def telegram_callback(request: Request) -> Dict:
         return {"ok": True}  # Ignorar mensajes normales u otros eventos
 
     try:
+        data = callback_query.get("data", "")
+        cq_id = callback_query.get("id")
+
         supabase_client = SupabaseNewsClient()
         telegram = TelegramBotClient(supabase_client=supabase_client)
-        result = telegram.callback_handler(callback_query)
+        result = telegram.callback_handler(data)
         logger.info("Callback telegram procesado: %s", result)
+
+        # Responder a Telegram
+        if cq_id:
+            token = config.TELEGRAM_BOT_TOKEN
+            text = "✓ Publicada" if result.get("action") == "publicada" else "✕ Descartada" if result.get("action") == "descartada" else ""
+            
+            payload = {"callback_query_id": cq_id}
+            if text:
+                payload["text"] = text
+
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{token}/answerCallbackQuery",
+                    json=payload,
+                    timeout=10
+                )
+            except Exception as e:
+                logger.error("Error enviando answerCallbackQuery: %s", e)
+
         return result
     except Exception:
         logger.exception("Error procesando callback de Telegram.")

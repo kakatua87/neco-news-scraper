@@ -121,6 +121,8 @@ class AIProcessor:
         Retorna dict con: titulo, cuerpo, resumen_seo, instagram_text, twitter_text, guion_video, slug.
         Lanza excepción si falla tras todos los reintentos.
         """
+        cuerpo = cuerpo[:3000] + "..." if len(cuerpo) > 3000 else cuerpo
+        
         user_prompt = (
             f"Sección: {seccion}\n"
             f"Título original: {titulo}\n"
@@ -129,6 +131,11 @@ class AIProcessor:
 
         text = self._call_with_retry(user_prompt)
         parsed = self._safe_json_parse(text)
+
+        if parsed.get("publicar") is False:
+            logger.info("IA sugirió no publicar: %s | motivo: %s", 
+                        titulo[:60], parsed.get("motivo", "sin motivo"))
+            raise ValueError("IA descartó la nota")
 
         # Validar campos requeridos
         required_fields = [
@@ -148,6 +155,8 @@ class AIProcessor:
         Sintetiza múltiples versiones del mismo hecho en una sola noticia original.
         Recibe una lista de textos de diferentes fuentes sobre el mismo evento.
         """
+        textos = [t[:1500] for t in textos]
+        
         sources_block = "\n\n--- VERSIÓN SIGUIENTE ---\n\n".join(
             f"[Versión {i+1}]:\n{t}" for i, t in enumerate(textos)
         )
@@ -171,10 +180,8 @@ class AIProcessor:
         if missing:
             raise ValueError(f"IA no devolvió campos requeridos: {', '.join(missing)}")
 
-        logger.info(
-            "Multi-source sintetizado OK | provider=%s | slug=%s | fuentes=%s",
-            self.provider, parsed.get("slug"), len(textos),
-        )
+        logger.info("Multi-source OK | slug=%s | fuentes=%s | titulo=%s",
+                    parsed.get("slug"), len(textos), parsed.get("titulo","")[:50])
         return parsed
 
     def _call_with_retry(self, user_prompt: str, max_retries: int = 3,
@@ -243,7 +250,7 @@ class AIProcessor:
             raise last_err
         raise RuntimeError("IA no generó texto tras todos los reintentos.")
 
-    def _safe_json_parse(self, raw_text: str) -> Dict:
+    def _safe_json_parse(self, raw_text: str, retry_on_fail: bool = True) -> Dict:
         """Intenta parsear JSON, limpiando si es necesario."""
         # Intento directo
         try:
@@ -266,6 +273,18 @@ class AIProcessor:
                 return json.loads(match.group(0))
             except json.JSONDecodeError:
                 pass
+
+        if retry_on_fail:
+            prompt = (
+                "El siguiente texto es un JSON incompleto o mal formado. \n"
+                "Completalo y devolvé SOLO el JSON válido y completo, sin markdown:\n"
+                f"{raw_text[:1000]}"
+            )
+            fixed_text = self._call_with_retry(
+                prompt, 
+                system_prompt="Devuelve únicamente el JSON corregido y completo. Sin texto adicional ni formato markdown."
+            )
+            return self._safe_json_parse(fixed_text, retry_on_fail=False)
 
         raise ValueError(f"No se pudo parsear JSON de la respuesta IA. Texto (truncado): {raw_text[:500]}")
 

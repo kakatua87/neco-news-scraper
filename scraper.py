@@ -179,11 +179,73 @@ class NewsScraper:
                 page.wait_for_timeout(1500)
                 html = page.content()
                 text = self._extract_article_text(html, domain=domain)
+                
+                self._validate_coherence(url, html, text)
+                
                 og_image = self._extract_og_image(html, url)
                 content_image = self._extract_content_image(html, domain, url)
                 return {"text": text, "og_image": og_image, "content_image": content_image}
             finally:
                 browser.close()
+
+    def get_article_content_batch(self, urls: List[str]) -> List[Dict]:
+        """Extrae contenido de múltiples URLs reutilizando un solo browser."""
+        results = []
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            for url in urls:
+                page = browser.new_page()
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    page.wait_for_timeout(1500)
+                    html = page.content()
+                    domain = self._get_domain(url)
+                    text = self._extract_article_text(html, domain=domain)
+                    
+                    self._validate_coherence(url, html, text)
+                    
+                    og_image = self._extract_og_image(html, url)
+                    content_image = self._extract_content_image(html, domain, url)
+                    results.append({
+                        "url": url,
+                        "text": text,
+                        "og_image": og_image,
+                        "content_image": content_image
+                    })
+                except Exception as e:
+                    logger.warning("Error extrayendo %s: %s", url, e)
+                    results.append({"url": url, "text": "", "og_image": None, 
+                                    "content_image": None})
+                finally:
+                    page.close()
+            browser.close()
+        return results
+
+    def _validate_coherence(self, url: str, html: str, text: str) -> None:
+        """Valida que el texto extraído contenga al menos 20% de las palabras del título."""
+        if not text:
+            return
+            
+        soup = BeautifulSoup(html, "html.parser")
+        title_tag = soup.title
+        titulo = title_tag.get_text() if title_tag else ""
+        if not titulo:
+            h1 = soup.find("h1")
+            titulo = h1.get_text() if h1 else ""
+
+        if not titulo:
+            return
+
+        stopwords = {"el", "la", "los", "las", "de", "del", "en", "un", "una",
+                     "y", "a", "que", "se", "con", "por", "es", "su", "al",
+                     "lo", "le", "esta", "este", "son", "ha", "fue"}
+        title_tokens = [t for t in re.sub(r"[^a-záéíóúñ\ ]", "", titulo.lower()).split()
+                        if t not in stopwords and len(t) > 3]
+        if title_tokens:
+            text_lower = text.lower()
+            matches = sum(1 for token in title_tokens if token in text_lower)
+            if (matches / len(title_tokens)) < 0.2:
+                logger.warning("Posible desincronización título/cuerpo: %s", url)
 
     @staticmethod
     def get_wikimedia_image(query: str) -> Optional[str]:
@@ -467,17 +529,20 @@ class NewsScraper:
             "seguridad": "Policiales", "judiciales": "Policiales", "accidentes": "Policiales",
             "economia": "Economía", "economía": "Economía", "economic": "Economía",
             "campo": "Economía", "agro": "Economía", "agropecuaria": "Economía", "empresas": "Economía", "negocios": "Economía",
+            "rural": "Economía", "industria": "Economía",
             "política": "Política", "politica": "Política", "politics": "Política",
             "nacionales": "Política", "nación": "Política", "argentina": "Política", "mundo": "Política", "elecciones": "Política", "gobierno": "Política",
             "deportes": "Deportes", "deporte": "Deportes", "sports": "Deportes", "futbol": "Deportes", "básquet": "Deportes",
             "sociedad": "Sociedad", "social": "Sociedad", "generales": "Sociedad",
+            "medio ambiente": "Sociedad", "ambiente": "Sociedad",
             "espectaculos": "Sociedad", "espectáculos": "Sociedad", "tendencias": "Sociedad", "mujer": "Sociedad",
             "local": "Local", "ciudad": "Local", "la ciudad": "Local",
             "necochea": "Local", "locales": "Local", "zonales": "Local", "zona": "Local",
-            "servicios": "Local", "tránsito": "Local",
+            "servicios": "Local", "tránsito": "Local", "turismo": "Local",
+            "quequén": "Local", "quequen": "Local", "san cayetano": "Local", "lobería": "Local", "loberia": "Local", "general": "Local",
             "salud": "Salud", "health": "Salud",
             "educacion": "Educación", "educación": "Educación", "universidad": "Educación",
-            "cultura": "Cultura", "culture": "Cultura", "arte": "Cultura",
+            "cultura": "Cultura", "culture": "Cultura", "arte": "Cultura", "música": "Cultura", "musica": "Cultura",
             "tecnologia": "Tecnología", "tecnología": "Tecnología",
             "obituarios": "Obituarios", "fúnebres": "Obituarios", "sepelios": "Obituarios",
             "farmacias": "Farmacias", "turno": "Farmacias",
@@ -487,7 +552,7 @@ class NewsScraper:
         for key, value in mapping.items():
             if key in normalized:
                 return value
-        return raw.strip().title() if raw.strip() else "General"
+        return "Local"
 
     @staticmethod
     def _is_non_article_url(url: str) -> bool:

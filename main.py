@@ -239,6 +239,21 @@ def pipeline() -> None:
 
             # Insertar en Supabase
             inserted = supabase_client.insert_noticia(payload)
+
+            # Subir imagen a Supabase Storage
+            if best_image:
+                try:
+                    from image_handler import ImageHandler
+                    handler = ImageHandler(supabase_client)
+                    nueva_url = handler.upload_image(best_image, inserted["id"])
+                    if nueva_url:
+                        supabase_client.update_imagen(inserted["id"], nueva_url)
+                        inserted["imagen_url"] = nueva_url
+                        logger.info("Imagen subida a Storage: %s", nueva_url[:80])
+                except Exception:
+                    logger.warning("No se pudo subir imagen para id=%s. Usando URL original.", 
+                                 inserted.get("id"))
+
             # Marcar todas las URLs del grupo como procesadas
             for u in urls:
                 existing_urls.add(u)

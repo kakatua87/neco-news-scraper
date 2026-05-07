@@ -80,31 +80,112 @@ def _jaccard(a: set, b: set) -> float:
 
 def _group_by_similarity(notes: List[Dict], threshold: float = 0.65) -> List[List[Dict]]:
     """
-    Agrupa noticias por similaridad de título usando Jaccard.
-    Retorna lista de grupos (cada grupo = lista de noticias sobre el mismo evento).
+    Agrupa noticias sobre el mismo hecho usando similaridad contextual.
+    
+    Criterios para agrupar (TODOS deben cumplirse, no solo uno):
+    1. Similaridad Jaccard de tokens >= threshold (condición necesaria pero no suficiente)
+    2. Comparten al menos UNA entidad concreta: nombre propio, número, 
+       lugar específico o nombre de institución
+    3. La sección temática es compatible (no agrupar Deportes con Policiales)
+    
+    Si la similaridad es alta pero no comparten entidades concretas → NO agrupar.
     """
     groups: List[List[Dict]] = []
     used = set()
-
-    # Pre-calcular tokens de cada título
     tokens = [_normalize_title(n.get("titulo", "")) for n in notes]
-
+    
+    # Secciones incompatibles entre sí (nunca agrupar notas de grupos distintos)
+    SECTION_GROUPS = [
+        {"Deportes"},
+        {"Policiales"},
+        {"Política", "Local"},
+        {"Economía"},
+        {"Sociedad", "Salud", "Cultura"},
+    ]
+    
+    def sections_compatible(s1: str, s2: str) -> bool:
+        """Dos secciones son compatibles si están en el mismo grupo o alguna es General/Local."""
+        s1, s2 = s1.strip().lower(), s2.strip().lower()
+        if s1 == s2:
+            return True
+        for group in SECTION_GROUPS:
+            g_lower = {s.lower() for s in group}
+            if s1 in g_lower and s2 in g_lower:
+                return True
+        return False
+    
+    def extract_entities(title: str) -> set:
+        """
+        Extrae entidades concretas: palabras capitalizadas, números, 
+        nombres de lugares conocidos de Necochea.
+        """
+        # Números (incluyendo con coma/punto)
+        numbers = set(re.findall(r'\b\d+(?:[.,]\d+)?\b', title))
+        
+        # Palabras capitalizadas (nombres propios)
+        # Excluir primera palabra de la oración (siempre capitalizada)
+        words = title.split()
+        capitalized = {w for w in words[1:] if w and w[0].isupper() 
+                      and len(w) > 2 and w.lower() not in _STOPWORDS}
+        
+        # Lugares conocidos de Necochea (siempre son entidades)
+        LUGARES = {"necochea", "quequén", "quequen", "lobería", "loberia", 
+                   "san cayetano", "miramar", "tres arroyos", "claromecó",
+                   "ruta 88", "ruta 11", "ruta 3"}
+        text_lower = title.lower()
+        lugares_found = {l for l in LUGARES if l in text_lower}
+        
+        return numbers | capitalized | lugares_found
+    
     for i, note in enumerate(notes):
         if i in used:
             continue
         group = [note]
         used.add(i)
-
+        entities_i = extract_entities(note.get("titulo", ""))
+        section_i = note.get("seccion", "Local")
+        
         for j in range(i + 1, len(notes)):
             if j in used:
                 continue
+            
+            # Criterio 1: similaridad mínima de tokens
             sim = _jaccard(tokens[i], tokens[j])
-            if sim >= threshold:
-                group.append(notes[j])
-                used.add(j)
-
+            if sim < threshold:
+                continue
+            
+            # Criterio 2: secciones compatibles
+            section_j = notes[j].get("seccion", "Local")
+            if not sections_compatible(section_i, section_j):
+                logger.debug(
+                    "Notas con sim=%.2f rechazadas por secciones incompatibles: %s vs %s",
+                    sim, section_i, section_j
+                )
+                continue
+            
+            # Criterio 3: comparten al menos una entidad concreta
+            entities_j = extract_entities(notes[j].get("titulo", ""))
+            shared_entities = entities_i & entities_j
+            if not shared_entities:
+                logger.debug(
+                    "Notas con sim=%.2f rechazadas por falta de entidades compartidas.\n"
+                    "  Título A: %s\n  Título B: %s",
+                    sim, note.get("titulo","")[:60], notes[j].get("titulo","")[:60]
+                )
+                continue
+            
+            # Pasa todos los criterios → mismo hecho
+            logger.info(
+                "Agrupadas por mismo hecho (sim=%.2f, entidades=%s):\n"
+                "  [A] %s\n  [B] %s",
+                sim, shared_entities,
+                note.get("titulo","")[:70], notes[j].get("titulo","")[:70]
+            )
+            group.append(notes[j])
+            used.add(j)
+        
         groups.append(group)
-
+    
     return groups
 
 

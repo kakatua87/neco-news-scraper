@@ -65,7 +65,7 @@ PORTAL_URL: str = os.getenv("PORTAL_URL", "https://neco-news.vercel.app").strip(
 ADMIN_URL: str = f"{PORTAL_URL}/admin"
 
 # ─── Branding ─────────────────────────────────────────────────────
-PORTAL_NAME: str = "Neco News"
+PORTAL_NAME: str = "Neco Now"
 
 
 def validate() -> bool:

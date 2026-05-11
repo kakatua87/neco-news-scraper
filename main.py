@@ -413,7 +413,7 @@ async def telegram_callback(request: Request) -> Dict:
 
         supabase_client = SupabaseNewsClient()
         telegram = TelegramBotClient(supabase_client=supabase_client)
-        result = telegram.callback_handler(data)
+        result = telegram.callback_handler(data, callback_query=callback_query)
         logger.info("Callback telegram procesado: %s", result)
 
         # Responder a Telegram

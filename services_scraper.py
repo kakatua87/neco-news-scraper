@@ -134,8 +134,7 @@ class ServicesScraper:
             "- Devolvé SOLO el JSON, sin bloques de código ni explicaciones."
         )
         
-        # Enviar el texto en chunks si es muy largo (max ~12000 chars para el prompt)
-        text_to_send = raw_text[:15000]
+        text_to_send = raw_text[:4500]
         
         user_prompt = f"Texto crudo de necrológicas:\n{text_to_send}"
         
@@ -232,7 +231,7 @@ class ServicesScraper:
                     "cuerpo": contenido,
                     "seccion": "Obituarios",
                     "slug": f"obituarios-{anio}-{mes:02d}",
-                    "url_original": "https://tsnnecochea.com.ar/servicios/necrologicas-157/",
+                    "url_original": f"https://tsnnecochea.com.ar/servicios/necrologicas-157/?mes={anio}-{mes:02d}",
                     "imagen_url": ""
                 }
                 self._upsert_service(payload)

@@ -60,6 +60,19 @@ class SupabaseNewsClient:
             raise RuntimeError("Supabase no devolvió filas insertadas.")
         return rows[0]
 
+    def get_noticia_by_id(self, noticia_id: str) -> Dict:
+        """Obtiene una noticia por su ID."""
+        try:
+            response = self.client.table("noticias")\
+                .select("id, titulo, estado, seccion")\
+                .eq("id", noticia_id)\
+                .single()\
+                .execute()
+            return response.data or {}
+        except Exception:
+            logger.exception("Error obteniendo noticia id=%s", noticia_id)
+            return {}
+
     def update_imagen(self, noticia_id: str, imagen_url: str) -> None:
         """Actualiza la imagen_url de una noticia ya insertada."""
         try:

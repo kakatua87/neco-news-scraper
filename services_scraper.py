@@ -56,22 +56,25 @@ class ServicesScraper:
             return None
 
     def fetch_obituarios(self) -> Optional[Dict]:
-        """Scrapea avisos fúnebres desde tsnnecochea.com.ar"""
-        index_url = "https://tsnnecochea.com.ar/seccion/servicios/"
+        """Scrapea avisos fúnebres desde tsnnecochea.com.ar/tag/brandsafety/"""
+        index_url = "https://tsnnecochea.com.ar/tag/brandsafety/"
         try:
             r = requests.get(index_url, headers=self.headers, timeout=15)
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "html.parser")
             
-            # Buscar el primer artículo que diga Avisos fúnebres
+            # Buscar el primer enlace a un aviso fúnebre (el más reciente)
             article_link = None
-            for a in soup.find_all("a", href=True):
-                if "Avisos fúnebres" in a.text or "avisos-funebres" in a["href"]:
-                    article_link = a["href"]
+            article_title = None
+            for a in soup.select("a.cover-link, a[href*='funebre']"):
+                href = a.get("href", "")
+                if "funebre" in href:
+                    article_link = href
+                    article_title = a.get("title", "") or a.get_text(strip=True)
                     break
                     
             if not article_link:
-                logger.error("No se encontró enlace a avisos fúnebres.")
+                logger.error("No se encontró enlace a avisos fúnebres en /tag/brandsafety/.")
                 return None
                 
             # Ir al artículo
@@ -79,20 +82,20 @@ class ServicesScraper:
             r2.raise_for_status()
             soup2 = BeautifulSoup(r2.text, "html.parser")
             
-            content_div = soup2.select_one(".entry-content") or soup2.select_one("article")
+            content_div = soup2.select_one(".article-body") or soup2.select_one(".entry-content") or soup2.select_one("article")
             if not content_div:
                 logger.error("No se encontró el contenido del aviso fúnebre.")
                 return None
                 
             text = content_div.get_text(separator="\n", strip=True)
             
-            formatted_text = self._format_with_ai("Avisos Fúnebres", text, "Extraé y presentá los avisos fúnebres de forma sumamente respetuosa usando Markdown (usa `### Nombre del fallecido` y debajo los detalles como edad, familiares y servicio de sepelio). No inventes datos ni agregues opiniones.")
+            formatted_text = self._format_with_ai("Avisos Fúnebres", text, "Extraé y presentá los avisos fúnebres de forma sumamente respetuosa usando Markdown (usa `### Nombre del fallecido` y debajo los detalles como edad, familiares y servicio de sepelio). No inventes datos ni agregues opiniones. No incluyas secciones de redes sociales ni noticias relacionadas.")
             
             if not formatted_text:
                 formatted_text = text[:2000]
                 
             return {
-                "titulo": f"Avisos Fúnebres - {datetime.now().strftime('%d/%m/%Y')}",
+                "titulo": article_title or f"Avisos Fúnebres - {datetime.now().strftime('%d/%m/%Y')}",
                 "cuerpo": formatted_text,
                 "seccion": "Obituarios",
                 "slug": "avisos-funebres",

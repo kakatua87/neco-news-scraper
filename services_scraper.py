@@ -1,12 +1,14 @@
 import logging
 import requests
+import re
+import json
 from bs4 import BeautifulSoup
-from typing import Optional, Dict
+from typing import Optional, Dict, List
+from datetime import datetime
 
 import config
 from ai_processor import AIProcessor
 from supabase_client import SupabaseNewsClient
-from datetime import datetime
 
 logger = logging.getLogger("neconews.services")
 
@@ -55,55 +57,120 @@ class ServicesScraper:
             logger.error("Error scrapeando farmacias: %s", e)
             return None
 
-    def fetch_obituarios(self) -> Optional[Dict]:
-        """Scrapea avisos fúnebres desde tsnnecochea.com.ar/tag/brandsafety/"""
-        index_url = "https://tsnnecochea.com.ar/tag/brandsafety/"
+    def fetch_obituarios(self) -> Optional[List[Dict]]:
+        """
+        Scrapea TODOS los avisos fúnebres desde la página principal de necrológicas de TSN.
+        Los agrupa por mes/año usando IA para detectar las fechas.
+        Retorna una lista de dicts, uno por cada mes de 2026.
+        """
+        url = "https://tsnnecochea.com.ar/servicios/necrologicas-157/"
         try:
-            r = requests.get(index_url, headers=self.headers, timeout=15)
+            r = requests.get(url, headers=self.headers, timeout=30)
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "html.parser")
             
-            # Buscar el primer enlace a un aviso fúnebre (el más reciente)
-            article_link = None
-            article_title = None
-            for a in soup.select("a.cover-link, a[href*='funebre']"):
-                href = a.get("href", "")
-                if "funebre" in href:
-                    article_link = href
-                    article_title = a.get("title", "") or a.get_text(strip=True)
-                    break
-                    
-            if not article_link:
-                logger.error("No se encontró enlace a avisos fúnebres en /tag/brandsafety/.")
-                return None
-                
-            # Ir al artículo
-            r2 = requests.get(article_link, headers=self.headers, timeout=15)
-            r2.raise_for_status()
-            soup2 = BeautifulSoup(r2.text, "html.parser")
-            
-            content_div = soup2.select_one(".article-body") or soup2.select_one(".entry-content") or soup2.select_one("article")
+            content_div = soup.select_one(".entry-content") or soup.select_one(".article-body") or soup.select_one("article")
             if not content_div:
-                logger.error("No se encontró el contenido del aviso fúnebre.")
+                logger.error("No se encontró el contenido de necrológicas.")
                 return None
                 
-            text = content_div.get_text(separator="\n", strip=True)
+            # Obtener todo el texto crudo
+            raw_text = content_div.get_text(separator="\n", strip=True)
             
-            formatted_text = self._format_with_ai("Avisos Fúnebres", text, "Extraé y presentá los avisos fúnebres de forma sumamente respetuosa usando Markdown (usa `### Nombre del fallecido` y debajo los detalles como edad, familiares y servicio de sepelio). No inventes datos ni agregues opiniones. No incluyas secciones de redes sociales ni noticias relacionadas.")
+            # Limpiar texto irrelevante (redes sociales, noticias relacionadas, etc.)
+            cutoff_markers = ["Más avisos fúnebres", "Noticias relacionadas", "Seguinos en redes", "BRANDSAFETY"]
+            for marker in cutoff_markers:
+                idx = raw_text.find(marker)
+                if idx > 0:
+                    raw_text = raw_text[:idx]
             
-            if not formatted_text:
-                formatted_text = text[:2000]
+            if not raw_text or len(raw_text) < 100:
+                logger.error("Texto de necrológicas demasiado corto o vacío.")
+                return None
+            
+            # Enviar a IA para agrupar por mes
+            grouped = self._group_obituarios_by_month(raw_text)
+            if not grouped:
+                logger.error("No se pudo agrupar los obituarios por mes.")
+                return None
                 
-            return {
-                "titulo": article_title or f"Avisos Fúnebres - {datetime.now().strftime('%d/%m/%Y')}",
-                "cuerpo": formatted_text,
-                "seccion": "Obituarios",
-                "slug": "avisos-funebres",
-                "url_original": article_link,
-                "imagen_url": "https://images.unsplash.com/photo-1497926131494-01306eeb41a1?q=80&w=1200&auto=format&fit=crop"
-            }
+            return grouped
+            
         except Exception as e:
             logger.error("Error scrapeando obituarios: %s", e)
+            return None
+
+    def _group_obituarios_by_month(self, raw_text: str) -> Optional[List[Dict]]:
+        """Usa IA para parsear cada aviso fúnebre, detectar su fecha y agruparlo por mes."""
+        if not self.ai:
+            logger.error("IA no disponible para agrupar obituarios.")
+            return None
+        
+        system_prompt = (
+            "Sos un asistente de procesamiento de datos para un diario digital. "
+            "Tu tarea es analizar un texto largo con múltiples avisos fúnebres y agruparlos por MES y AÑO.\n\n"
+            "INSTRUCCIONES:\n"
+            "1. Cada aviso fúnebre comienza con el APELLIDO en mayúsculas seguido de la descripción.\n"
+            "2. Detectá la fecha de fallecimiento de cada aviso (puede estar en formatos como 'Falleció el 08-05-2026', "
+            "'Falleció el día 4 de mayo de 2026', 'Falleció el 01/05/2026', etc.)\n"
+            "3. Agrupá los avisos por mes y año.\n"
+            "4. SOLO incluí avisos del año 2026.\n"
+            "5. Para cada grupo mensual, formateá los avisos en Markdown respetuoso.\n"
+            "6. Devolvé ÚNICAMENTE un JSON array con esta estructura (sin texto extra):\n"
+            '[\n'
+            '  {\n'
+            '    "mes": 5,\n'
+            '    "mes_nombre": "Mayo",\n'
+            '    "anio": 2026,\n'
+            '    "cantidad": 7,\n'
+            '    "contenido": "### APELLIDO, Nombre\\nFalleció el ...\\n\\n### APELLIDO2, Nombre2\\nFalleció el ..."\n'
+            '  }\n'
+            ']\n\n'
+            "REGLAS:\n"
+            "- NO inventes datos. Si no podés detectar la fecha, omití ese aviso.\n"
+            "- Ordená los meses de mayor a menor (mayo primero, enero último).\n"
+            "- En 'contenido', usá ### para cada nombre y un párrafo con los detalles.\n"
+            "- NO incluyas avisos de 2025 u otros años.\n"
+            "- Devolvé SOLO el JSON, sin bloques de código ni explicaciones."
+        )
+        
+        # Enviar el texto en chunks si es muy largo (max ~12000 chars para el prompt)
+        text_to_send = raw_text[:15000]
+        
+        user_prompt = f"Texto crudo de necrológicas:\n{text_to_send}"
+        
+        try:
+            response = self.ai.client.chat.completions.create(
+                model=self.ai.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=4000,
+            )
+            result_text = (response.choices[0].message.content or "").strip()
+            
+            # Limpiar posibles bloques de código markdown
+            if result_text.startswith("```"):
+                result_text = re.sub(r'^```\w*\n?', '', result_text)
+                result_text = re.sub(r'\n?```$', '', result_text)
+            
+            grouped = json.loads(result_text)
+            
+            if not isinstance(grouped, list):
+                logger.error("La IA no devolvió un array válido.")
+                return None
+                
+            logger.info("IA agrupó %d meses de obituarios.", len(grouped))
+            return grouped
+            
+        except json.JSONDecodeError as e:
+            logger.error("Error parseando JSON de IA: %s", e)
+            logger.debug("Respuesta de IA: %s", result_text[:500] if result_text else "vacío")
+            return None
+        except Exception as e:
+            logger.error("Error en IA para agrupar obituarios: %s", e)
             return None
 
     def _format_with_ai(self, title: str, text: str, instructions: str) -> Optional[str]:
@@ -147,10 +214,31 @@ class ServicesScraper:
             self._upsert_service(farmacias)
             logger.info("Farmacias actualizadas con éxito.")
             
-        obituarios = self.fetch_obituarios()
-        if obituarios:
-            self._upsert_service(obituarios)
-            logger.info("Obituarios actualizados con éxito.")
+        # Obituarios: scrapear, agrupar por mes y guardar cada mes
+        obituarios_por_mes = self.fetch_obituarios()
+        if obituarios_por_mes:
+            for grupo in obituarios_por_mes:
+                mes = grupo.get("mes", 0)
+                mes_nombre = grupo.get("mes_nombre", "")
+                anio = grupo.get("anio", 2026)
+                cantidad = grupo.get("cantidad", 0)
+                contenido = grupo.get("contenido", "")
+                
+                if not contenido or mes == 0:
+                    continue
+                    
+                payload = {
+                    "titulo": f"Avisos Fúnebres — {mes_nombre} {anio}",
+                    "cuerpo": contenido,
+                    "seccion": "Obituarios",
+                    "slug": f"obituarios-{anio}-{mes:02d}",
+                    "url_original": "https://tsnnecochea.com.ar/servicios/necrologicas-157/",
+                    "imagen_url": ""
+                }
+                self._upsert_service(payload)
+                logger.info("Obituarios %s %d: %d avisos guardados.", mes_nombre, anio, cantidad)
+        else:
+            logger.warning("No se pudieron obtener obituarios.")
             
     def _upsert_service(self, payload: Dict):
         """Busca si ya existe una nota de hoy para este servicio y la actualiza, sino la crea."""
@@ -164,10 +252,8 @@ class ServicesScraper:
             "estado": "publicada" # Se publican automáticamente
         }
         
-        # Eliminar las notas viejas de esa sección para mantener solo la actual (o buscar y actualizar la existente)
-        # Lo más fácil: buscar si hay una con ese slug exacto y actualizar.
         try:
-            # Buscar si existe
+            # Buscar si existe por slug
             res = self.supabase.client.from_("noticias").select("id").eq("slug", payload["slug"]).execute()
             if res.data and len(res.data) > 0:
                 # Update

@@ -5,7 +5,7 @@ Envía previews de noticias con botones inline para publicar/descartar.
 
 import json
 import logging
-from typing import Dict
+from typing import Dict, List
 
 import requests
 
@@ -77,6 +77,87 @@ class TelegramBotClient:
             logger.info("Preview enviada a Telegram para noticia id=%s", noticia_id)
         except Exception as e:
             logger.error("Error al enviar preview a Telegram: %s", e)
+
+    def send_grupo_preview(self, notas: List[Dict], grupo_id: str) -> None:
+        """
+        Envía una preview de un grupo de notas raw scrapeadas (sin IA).
+        Muestra todas las fuentes disponibles y ofrece botones para procesar cada fuente
+        o procesar el grupo completo con IA (cross-sourcing).
+        """
+        if not notas:
+            return
+
+        lider = notas[0]
+        titulo = lider.get("titulo", "(sin título)")
+        seccion = lider.get("seccion", "Local")
+        num_fuentes = len(notas)
+
+        # Construir líneas de fuentes
+        fuentes_lines = []
+        for i, nota in enumerate(notas, 1):
+            fuente_nombre = nota.get("fuente", f"Fuente {i}")
+            fuentes_lines.append(f"  {i}. {fuente_nombre}")
+
+        fuentes_text = "\n".join(fuentes_lines) if fuentes_lines else "  (fuente desconocida)"
+
+        text = (
+            f"🔍 NUEVO GRUPO — {num_fuentes} {'fuente' if num_fuentes == 1 else 'fuentes'}\n\n"
+            f"📰 {titulo}\n\n"
+            f"📂 Sección: {seccion}\n\n"
+            f"📡 Fuentes:\n{fuentes_text}\n\n"
+            f"🆔 grupo_id: {grupo_id[:8]}…"
+        )
+
+        # IDs de las notas como lista para los botones
+        ids = [n["id"] for n in notas if n.get("id")]
+
+        # Fila de botones por fuente individual
+        keyboard = []
+        for i, nota in enumerate(notas):
+            nota_id = nota.get("id")
+            if not nota_id:
+                continue
+            fuente_label = nota.get("fuente", f"Fuente {i+1}")[:15]
+            keyboard.append([{
+                "text": f"⚡ Procesar: {fuente_label}",
+                "callback_data": f"procesar_solo_{nota_id}_{grupo_id[:8]}"
+            }])
+
+        # Si hay más de 1 fuente, botón para cross-sourcing completo
+        if len(ids) > 1:
+            ids_str = ",".join(ids)
+            keyboard.append([{
+                "text": f"🔀 Cross-source ({num_fuentes} fuentes)",
+                "callback_data": f"procesar_grupo_{grupo_id}"
+            }])
+
+        # Botón para descartar todo el grupo
+        keyboard.append([{
+            "text": "🗑 Descartar grupo",
+            "callback_data": f"descartar_grupo_{grupo_id}"
+        }])
+
+        payload = {
+            "chat_id": self.chat_id,
+            "text": text[:4096],
+            "reply_markup": json.dumps({"inline_keyboard": keyboard}),
+        }
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/sendMessage",
+                json=payload,
+                timeout=20,
+            )
+            if response.status_code >= 400:
+                logger.error(
+                    "Telegram sendMessage (grupo) falló (status=%s). body=%s",
+                    response.status_code, response.text[:2000]
+                )
+            response.raise_for_status()
+            logger.info("Grupo preview enviado a Telegram: grupo_id=%s", grupo_id)
+        except Exception as e:
+            logger.error("Error al enviar grupo preview a Telegram: %s", e)
 
     def _edit_message(self, chat_id, message_id, text, keyboard=None):
         payload = {

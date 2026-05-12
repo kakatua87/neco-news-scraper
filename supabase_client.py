@@ -130,3 +130,124 @@ class SupabaseNewsClient:
         except Exception:
             logger.exception("Error obteniendo stats de Supabase.")
             return {"publicadas": 0, "pendientes": 0, "descartadas": 0}
+
+    # ─── Métodos para pipeline raw-first ─────────────────────────────
+
+    def insert_noticia_raw(self, datos: Dict) -> Dict:
+        """Inserta una noticia cruda SIN reescritura de IA, con estado='raw'."""
+        payload = {
+            "titulo": datos.get("titulo_original", "").strip(),
+            "cuerpo": datos.get("cuerpo", "").strip(),
+            "resumen_seo": "",
+            "seccion": datos.get("seccion", "Local"),
+            "estado": "raw",
+            "fuente": datos.get("fuente", ""),
+            "url_original": datos.get("url_original"),
+            "imagen_url": datos.get("imagen_url"),
+            "instagram_text": "",
+            "twitter_text": "",
+            "guion_video": "",
+            "slug": datos.get("slug", "").strip(),
+            "es_portada": False,
+            "grupo_id": datos.get("grupo_id"),
+            "titulo_original": datos.get("titulo_original", ""),
+        }
+        try:
+            response = self.client.table("noticias").insert(payload).execute()
+            rows = response.data or []
+            if not rows:
+                raise RuntimeError("Supabase no devolvió filas insertadas (raw).")
+            logger.info(
+                "Noticia raw insertada: slug=%s | grupo_id=%s",
+                payload["slug"], payload["grupo_id"]
+            )
+            return rows[0]
+        except Exception:
+            logger.exception("Error insertando noticia raw: url=%s", datos.get("url_original"))
+            raise
+
+    def get_notas_by_grupo(self, grupo_id: str) -> List[Dict]:
+        """Obtiene todas las notas raw de un grupo dado su grupo_id."""
+        try:
+            response = (
+                self.client.table("noticias")
+                .select("*")
+                .eq("grupo_id", grupo_id)
+                .eq("estado", "raw")
+                .execute()
+            )
+            return response.data or []
+        except Exception:
+            logger.exception("Error obteniendo notas del grupo_id=%s", grupo_id)
+            return []
+
+    def get_notas_by_ids(self, ids: List[str]) -> List[Dict]:
+        """Obtiene notas por lista de IDs."""
+        if not ids:
+            return []
+        try:
+            response = (
+                self.client.table("noticias")
+                .select("id, titulo, cuerpo, fuente, imagen_url, seccion, url_original")
+                .in_("id", ids)
+                .execute()
+            )
+            return response.data or []
+        except Exception:
+            logger.exception("Error obteniendo notas por ids: %s", ids)
+            return []
+
+    def delete_notas_raw_del_grupo(self, grupo_id: str, excepto_id: str) -> None:
+        """Marca como 'descartada' todas las notas raw de un grupo excepto la publicada."""
+        try:
+            self.client.table("noticias") \
+                .update({"estado": "descartada"}) \
+                .eq("grupo_id", grupo_id) \
+                .neq("id", excepto_id) \
+                .eq("estado", "raw") \
+                .execute()
+            logger.info(
+                "Notas raw descartadas del grupo_id=%s (excepto id=%s)",
+                grupo_id, excepto_id
+            )
+        except Exception:
+            logger.exception(
+                "Error descartando notas raw del grupo_id=%s", grupo_id
+            )
+
+    def update_noticia_con_ia(self, noticia_id: str, datos_ia: Dict) -> None:
+        """Actualiza una noticia raw con el resultado de la IA y la pasa a 'pendiente'."""
+        try:
+            # Obtener la sección actual como fallback
+            noticia_actual = self.get_noticia_by_id(noticia_id)
+            seccion_fallback = noticia_actual.get("seccion", "Local")
+
+            update_data = {
+                "titulo": datos_ia.get("titulo", "").strip(),
+                "cuerpo": datos_ia.get("cuerpo", "").strip(),
+                "resumen_seo": datos_ia.get("resumen_seo", ""),
+                "instagram_text": datos_ia.get("instagram_text", ""),
+                "twitter_text": datos_ia.get("twitter_text", ""),
+                "guion_video": datos_ia.get("guion_video", ""),
+                "slug": datos_ia.get("slug", "").strip(),
+                "seccion": datos_ia.get("seccion_sugerida") or seccion_fallback,
+                "estado": "pendiente",
+            }
+            self.client.table("noticias") \
+                .update(update_data) \
+                .eq("id", noticia_id) \
+                .execute()
+            logger.info(
+                "Noticia actualizada con IA: id=%s | seccion=%s",
+                noticia_id, update_data["seccion"]
+            )
+        except Exception:
+            logger.exception("Error actualizando noticia con IA: id=%s", noticia_id)
+            raise
+
+
+# ─── SQL para ejecutar en Supabase (una sola vez) ────────────────────────────
+# ALTER TABLE noticias ADD COLUMN IF NOT EXISTS grupo_id uuid;
+# ALTER TABLE noticias ADD COLUMN IF NOT EXISTS titulo_original text;
+# ALTER TABLE noticias ADD COLUMN IF NOT EXISTS fuente text;
+# CREATE INDEX IF NOT EXISTS idx_noticias_grupo_id ON noticias(grupo_id);

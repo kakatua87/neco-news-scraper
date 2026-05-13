@@ -246,6 +246,91 @@ class SupabaseNewsClient:
             raise
 
 
+    # ─── Limpieza y expiración ───────────────────────────────────────
+
+    def descartar_pendientes_sin_grupo(self) -> int:
+        """
+        Marca como 'descartada' todas las notas en estado 'pendiente'
+        que NO tienen grupo_id (notas del sistema anterior, pre raw-first).
+        Retorna la cantidad de notas descartadas.
+        """
+        try:
+            response = (
+                self.client.table("noticias")
+                .select("id", count="exact")
+                .eq("estado", "pendiente")
+                .is_("grupo_id", "null")
+                .execute()
+            )
+            total = response.count or 0
+            if total == 0:
+                logger.info("No hay notas pendientes sin grupo para descartar.")
+                return 0
+
+            self.client.table("noticias") \
+                .update({"estado": "descartada"}) \
+                .eq("estado", "pendiente") \
+                .is_("grupo_id", "null") \
+                .execute()
+            logger.info("Descartadas %s notas pendientes sin grupo_id (sistema anterior).", total)
+            return total
+        except Exception:
+            logger.exception("Error descartando pendientes sin grupo.")
+            return 0
+
+    def expirar_noticias_antiguas(self, dias: int = 15) -> int:
+        """
+        Marca como 'descartada' las noticias con más de N días
+        que estén en estado 'pendiente' o 'raw'.
+        Las publicadas NO se tocan.
+        Retorna la cantidad de notas expiradas.
+        """
+        from datetime import timedelta
+        try:
+            limite = (datetime.now(timezone.utc) - timedelta(days=dias)).isoformat()
+
+            # Expirar pendientes viejas
+            r1 = (
+                self.client.table("noticias")
+                .select("id", count="exact")
+                .eq("estado", "pendiente")
+                .lt("created_at", limite)
+                .execute()
+            )
+            # Expirar raw viejas
+            r2 = (
+                self.client.table("noticias")
+                .select("id", count="exact")
+                .eq("estado", "raw")
+                .lt("created_at", limite)
+                .execute()
+            )
+            total = (r1.count or 0) + (r2.count or 0)
+
+            if total == 0:
+                logger.info("No hay noticias antiguas (>%s días) para expirar.", dias)
+                return 0
+
+            # Ejecutar las actualizaciones
+            self.client.table("noticias") \
+                .update({"estado": "descartada"}) \
+                .eq("estado", "pendiente") \
+                .lt("created_at", limite) \
+                .execute()
+
+            self.client.table("noticias") \
+                .update({"estado": "descartada"}) \
+                .eq("estado", "raw") \
+                .lt("created_at", limite) \
+                .execute()
+
+            logger.info("Expiradas %s noticias con más de %s días.", total, dias)
+            return total
+        except Exception:
+            logger.exception("Error expirando noticias antiguas.")
+            return 0
+
+
 # ─── SQL para ejecutar en Supabase (una sola vez) ────────────────────────────
 # ALTER TABLE noticias ADD COLUMN IF NOT EXISTS grupo_id uuid;
 # ALTER TABLE noticias ADD COLUMN IF NOT EXISTS titulo_original text;

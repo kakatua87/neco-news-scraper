@@ -493,6 +493,24 @@ async def manual_run_services() -> Dict:
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/limpieza")
+async def manual_limpieza() -> Dict:
+    """Descartar notas viejas pendientes sin grupo y limpiar base de datos."""
+    try:
+        supabase = SupabaseNewsClient()
+        n_sin_grupo = supabase.descartar_pendientes_sin_grupo()
+        n_expiradas = supabase.expirar_noticias_antiguas(dias=15)
+        return {
+            "ok": True,
+            "message": "Limpieza completada",
+            "descartadas_sin_grupo": n_sin_grupo,
+            "expiradas_por_antiguedad": n_expiradas
+        }
+    except Exception as e:
+        logger.exception("Error en ejecución manual de limpieza.")
+        return {"ok": False, "error": str(e)}
+
+
 # ─── Scheduler ───────────────────────────────────────────────────
 
 @app.on_event("startup")
@@ -519,6 +537,25 @@ def on_startup() -> None:
         hour=7,
         minute=0,
         id="services_pipeline",
+        replace_existing=True,
+    )
+
+    # Limpieza diaria a las 3:00 AM (expiar notas >15 dias y pendientes huerfanas)
+    def limpieza_diaria_job():
+        try:
+            logger.info("Iniciando tarea programada de limpieza...")
+            supabase = SupabaseNewsClient()
+            supabase.descartar_pendientes_sin_grupo()
+            supabase.expirar_noticias_antiguas(dias=15)
+        except Exception as e:
+            logger.error("Error en limpieza_diaria_job: %s", e)
+
+    scheduler.add_job(
+        limpieza_diaria_job,
+        trigger="cron",
+        hour=3,
+        minute=0,
+        id="limpieza_pipeline",
         replace_existing=True,
     )
 

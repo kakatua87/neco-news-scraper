@@ -64,6 +64,10 @@ SCHEDULER_INTERVAL_MINUTES: int = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "1
 PORTAL_URL: str = os.getenv("PORTAL_URL", "https://neco-news.vercel.app").strip()
 ADMIN_URL: str = f"{PORTAL_URL}/admin"
 
+# URL del propio servidor de scraping (Render). El bot la usa para llamar
+# a /procesar-grupo. Por defecto apunta a sí mismo (localhost en dev).
+SCRAPER_URL: str = os.getenv("SCRAPER_URL", "http://localhost:8000").strip()
+
 # ─── Branding ─────────────────────────────────────────────────────
 PORTAL_NAME: str = "Neco Now"
 

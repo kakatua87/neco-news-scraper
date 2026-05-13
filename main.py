@@ -261,7 +261,11 @@ def pipeline_scraping() -> None:
 
         # ── Notificar a Telegram ──────────────────────────────────
         try:
-            telegram.send_grupo_preview(notas_insertadas, grupo_id)
+            telegram.send_grupo_preview({
+                "grupo_id": grupo_id,
+                "notas": notas_insertadas,
+                "seccion_sugerida": leader.get("seccion", "Local"),
+            })
         except Exception:
             logger.exception("Error enviando grupo preview a Telegram grupo_id=%s", grupo_id)
 

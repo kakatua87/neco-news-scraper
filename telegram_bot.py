@@ -324,12 +324,58 @@ class TelegramBotClient:
         match = re.search(r"Título: (.*?)\n", text_msg)
         return match.group(1).strip() if match else "(Noticia)"
 
+    # ─── Recuperación de estado desde Supabase ─────────────────────
+
+    def _recover_grupo_estado(self, grupo_id: str) -> bool:
+        """
+        Reconstruye el estado en memoria de un grupo leyendo sus notas raw
+        desde Supabase. Útil cuando el servidor reinicia y pierde la RAM.
+        Retorna True si se pudo recuperar, False si el grupo ya no existe en raw.
+        """
+        try:
+            notas = self.supabase_client.get_notas_by_grupo(grupo_id)
+        except Exception:
+            logger.exception("Error recuperando grupo_id=%s desde Supabase", grupo_id)
+            return False
+
+        if not notas:
+            logger.warning("Recuperación fallida: grupo_id=%s sin notas raw en Supabase", grupo_id)
+            return False
+
+        imagen_id = next((n["id"] for n in notas if n.get("imagen_url") and n.get("id")), None)
+        seccion = notas[0].get("seccion", "Local")
+
+        self.grupos_estado[grupo_id] = {
+            "seleccionadas": [n["id"] for n in notas if n.get("id")],
+            "imagen_id": imagen_id,
+            "seccion": seccion,
+            "message_id": None,  # No conocemos el message_id original
+            "chat_id": None,
+            "notas": notas,
+        }
+        logger.info(
+            "Estado de grupo recuperado desde Supabase: grupo_id=%s | notas=%s",
+            grupo_id, len(notas),
+        )
+        return True
+
+    def _get_estado_o_recuperar(self, grupo_id: str) -> dict | None:
+        """Devuelve el estado del grupo desde memoria o lo recupera de Supabase."""
+        estado = self.grupos_estado.get(grupo_id)
+        if estado:
+            return estado
+        if self._recover_grupo_estado(grupo_id):
+            return self.grupos_estado.get(grupo_id)
+        return None
+
     # ─── Handlers de grupos ──────────────────────────────────────────
 
     def _handle_toggle(self, grupo_id: str, nota_id: str, chat_id, message_id) -> Dict:
-        estado = self.grupos_estado.get(grupo_id)
+        estado = self._get_estado_o_recuperar(grupo_id)
         if not estado:
-            return {"ok": False, "error": "grupo no encontrado en memoria"}
+            if chat_id and message_id:
+                self._edit_message(chat_id, message_id, "⚠️ Grupo expirado. El servidor se reinició. Esperá el próximo ciclo de scraping.", [])
+            return {"ok": False, "error": "grupo no encontrado"}
 
         seleccionadas: List[str] = estado["seleccionadas"]
         if nota_id in seleccionadas:
@@ -350,9 +396,11 @@ class TelegramBotClient:
         return {"ok": True, "action": "toggle"}
 
     def _handle_img(self, grupo_id: str, nota_id: str, chat_id, message_id) -> Dict:
-        estado = self.grupos_estado.get(grupo_id)
+        estado = self._get_estado_o_recuperar(grupo_id)
         if not estado:
-            return {"ok": False, "error": "grupo no encontrado en memoria"}
+            if chat_id and message_id:
+                self._edit_message(chat_id, message_id, "⚠️ Grupo expirado. El servidor se reinició. Esperá el próximo ciclo de scraping.", [])
+            return {"ok": False, "error": "grupo no encontrado"}
 
         estado["imagen_id"] = nota_id
         if chat_id and message_id:
@@ -371,8 +419,10 @@ class TelegramBotClient:
         return {"ok": True, "action": "sec_grupo_menu"}
 
     def _handle_sec_grupo_set(self, grupo_id: str, seccion: str, chat_id, message_id) -> Dict:
-        estado = self.grupos_estado.get(grupo_id)
+        estado = self._get_estado_o_recuperar(grupo_id)
         if not estado:
+            if chat_id and message_id:
+                self._edit_message(chat_id, message_id, "⚠️ Grupo expirado. El servidor se reinició. Esperá el próximo ciclo de scraping.", [])
             return {"ok": False, "error": "grupo no encontrado"}
 
         estado["seccion"] = seccion
@@ -393,9 +443,11 @@ class TelegramBotClient:
         return {"ok": True, "action": "sec_grupo_volver"}
 
     def _handle_procesar(self, grupo_id: str, chat_id, message_id) -> Dict:
-        estado = self.grupos_estado.get(grupo_id)
+        estado = self._get_estado_o_recuperar(grupo_id)
         if not estado:
-            return {"ok": False, "error": "grupo no encontrado en memoria"}
+            if chat_id and message_id:
+                self._edit_message(chat_id, message_id, "⚠️ Grupo expirado. El servidor se reinició. Esperá el próximo ciclo de scraping.", [])
+            return {"ok": False, "error": "grupo no encontrado"}
 
         seleccionadas = estado.get("seleccionadas", [])
         imagen_id = estado.get("imagen_id")
@@ -415,10 +467,10 @@ class TelegramBotClient:
         if chat_id and message_id:
             self._edit_message(chat_id, message_id, "⏳ Procesando con IA…", [])
 
-        # Llamar al endpoint /procesar-grupo
+        # Llamar al endpoint /procesar-grupo (vive en el scraper, no en el portal)
         try:
             resp = requests.post(
-                f"{config.PORTAL_URL.rstrip('/')}/procesar-grupo",
+                f"{config.SCRAPER_URL.rstrip('/')}/procesar-grupo",
                 json={
                     "grupo_id": grupo_id,
                     "fuentes_ids": seleccionadas,
@@ -454,9 +506,11 @@ class TelegramBotClient:
             return {"ok": False, "error": str(e)}
 
     def _handle_des_grupo(self, grupo_id: str, chat_id, message_id) -> Dict:
-        estado = self.grupos_estado.get(grupo_id)
+        estado = self._get_estado_o_recuperar(grupo_id)
         if not estado:
-            return {"ok": False, "error": "grupo no encontrado en memoria"}
+            if chat_id and message_id:
+                self._edit_message(chat_id, message_id, "⚠️ Grupo expirado. El servidor se reinició. Esperá el próximo ciclo de scraping.", [])
+            return {"ok": False, "error": "grupo no encontrado"}
 
         # Descartar todas las notas del grupo en Supabase
         for nota in estado.get("notas", []):

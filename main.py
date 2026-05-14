@@ -442,6 +442,64 @@ async def telegram_callback(request: Request) -> Dict:
         return {"ok": False}
 
 
+@app.get("/debug-env")
+async def debug_env() -> Dict:
+    """Muestra las variables de entorno relevantes (enmascaradas)."""
+    def mask(val: str) -> str:
+        if not val:
+            return "(VACÍO)"
+        if len(val) <= 6:
+            return val[:2] + "***"
+        return val[:4] + "..." + val[-4:]
+
+    return {
+        "TELEGRAM_BOT_TOKEN": mask(config.TELEGRAM_BOT_TOKEN or ""),
+        "TELEGRAM_CHAT_ID": config.TELEGRAM_CHAT_ID or "(VACÍO)",
+        "SCRAPER_URL": config.SCRAPER_URL or "(VACÍO)",
+        "PORTAL_URL": config.PORTAL_URL or "(VACÍO)",
+        "SUPABASE_URL": mask(config.SUPABASE_URL or ""),
+        "AI_PROVIDER": config.AI_PROVIDER or "(VACÍO)",
+    }
+
+
+@app.post("/test-telegram")
+async def test_telegram() -> Dict:
+    """Envía un mensaje de prueba a Telegram DESDE RENDER para verificar config."""
+    import requests as req
+    token = config.TELEGRAM_BOT_TOKEN
+    chat_id = config.TELEGRAM_CHAT_ID
+
+    if not token or not chat_id:
+        return {
+            "ok": False,
+            "error": "TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID no configurados",
+            "token_set": bool(token),
+            "chat_id_set": bool(chat_id),
+        }
+
+    text = (
+        "🔧 TEST DESDE RENDER\n\n"
+        "Si lees esto, las variables de Telegram en Render están bien.\n"
+        f"Chat ID: {chat_id}\n"
+        f"Token: {token[:8]}...{token[-4:]}"
+    )
+    try:
+        resp = req.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
+            timeout=15,
+        )
+        data = resp.json()
+        return {
+            "ok": data.get("ok", False),
+            "status_code": resp.status_code,
+            "description": data.get("description", ""),
+            "message_id": data.get("result", {}).get("message_id"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/procesar-grupo")
 async def procesar_grupo(request: Request) -> Dict:
     """

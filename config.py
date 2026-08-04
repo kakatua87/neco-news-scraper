@@ -81,10 +81,6 @@ def validate() -> bool:
         errors.append("SUPABASE_KEY")
     if not AI_API_KEY:
         errors.append("AI_API_KEY")
-    if not TELEGRAM_BOT_TOKEN:
-        errors.append("TELEGRAM_BOT_TOKEN")
-    if not TELEGRAM_CHAT_ID:
-        errors.append("TELEGRAM_CHAT_ID")
 
     if errors:
         logger.error(

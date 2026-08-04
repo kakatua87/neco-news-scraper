@@ -49,6 +49,7 @@ class SupabaseNewsClient:
             "url_original": datos.get("url_original"),
             "imagen_url": datos.get("imagen_url"),
             "instagram_text": datos.get("instagram_text"),
+            "instagram_titulo": datos.get("instagram_titulo"),
             "twitter_text": datos.get("twitter_text"),
             "guion_video": datos.get("guion_video"),
             "slug": datos.get("slug", "").strip(),
@@ -227,12 +228,15 @@ class SupabaseNewsClient:
                 "cuerpo": datos_ia.get("cuerpo", "").strip(),
                 "resumen_seo": datos_ia.get("resumen_seo", ""),
                 "instagram_text": datos_ia.get("instagram_text", ""),
+                "instagram_titulo": datos_ia.get("instagram_titulo", ""),
                 "twitter_text": datos_ia.get("twitter_text", ""),
                 "guion_video": datos_ia.get("guion_video", ""),
                 "slug": datos_ia.get("slug", "").strip(),
                 "seccion": datos_ia.get("seccion_sugerida") or seccion_fallback,
                 "estado": "pendiente",
             }
+            if datos_ia.get("fuente"):
+                update_data["fuente"] = datos_ia["fuente"]
             self.client.table("noticias") \
                 .update(update_data) \
                 .eq("id", noticia_id) \

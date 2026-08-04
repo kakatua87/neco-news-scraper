@@ -54,16 +54,19 @@ SYSTEM_PROMPT = (
     "3. Tono rioplatense natural: ni coloquial ni académico.\n"
     "4. Título: describe el hecho con precisión, máx 80 caracteres, "
     "sin signos de exclamación, sin palabras huecas como 'importante' o 'clave'.\n"
-    "5. NUNCA menciones la fuente original. La noticia es propia de Neco News.\n"
+    "5. Si te indico la fuente original, podés incluir UNA mención breve y natural "
+    "en el cuerpo (ej. 'según informó {fuente}', 'de acuerdo a lo publicado por "
+    "{fuente}'), como máximo una vez. Si no te doy fuente, no la inventes.\n"
     "6. Slug URL-friendly: minúsculas, sin tildes, guiones, máx 60 chars.\n"
     "7. Devolvé SOLO JSON válido. Sin markdown, sin texto extra.\n\n"
-    
+
     "Formato JSON de respuesta:\n"
     "{\n"
     '  "titulo": "Título periodístico preciso (máx 80 caracteres)",\n'
     '  "cuerpo": "Lead\\n\\nDesarrollo\\n\\nCierre con perspectiva si aplica",\n'
     '  "resumen_seo": "150-160 caracteres para Google, incluir Necochea",\n'
     '  "instagram_text": "Gancho impactante + contexto + 3-5 emojis + hashtags",\n'
+    '  "instagram_titulo": "Hook corto y atrapante para Instagram (máx 60 caracteres, sin hashtags)",\n'
     '  "twitter_text": "Dato más relevante + #Necochea (máx 280 chars)",\n'
     '  "guion_video": "Intro 5seg + desarrollo 20seg + cierre 5seg a cámara",\n'
     '  "slug": "titulo-url-friendly-sin-tildes-max-60-chars",\n'
@@ -97,16 +100,20 @@ MULTI_SOURCE_PROMPT = (
     
     "REGLAS:\n"
     "1. Cero frases copiadas de ninguna fuente.\n"
-    "2. Nunca menciones los medios de origen.\n"
+    "2. Si te indico las fuentes, podés atribuir de forma genérica ('medios locales "
+    "informaron', 'distintos medios de Necochea publicaron') o citar puntualmente un "
+    "medio si aporta un dato exclusivo suyo — máximo una mención en todo el cuerpo. "
+    "Si no te doy fuentes, no las inventes.\n"
     "3. Voz activa, tono rioplatense, rigor periodístico.\n"
     "4. Solo JSON válido como respuesta.\n\n"
-    
+
     "Formato JSON:\n"
     "{\n"
     '  "titulo": "Título periodístico preciso (máx 80 caracteres)",\n'
     '  "cuerpo": "Lead\\n\\nDesarrollo\\n\\nCierre",\n'
     '  "resumen_seo": "150-160 caracteres para Google, incluir Necochea",\n'
     '  "instagram_text": "Gancho + contexto + emojis + hashtags",\n'
+    '  "instagram_titulo": "Hook corto y atrapante para Instagram (máx 60 caracteres, sin hashtags)",\n'
     '  "twitter_text": "Dato clave + #Necochea (máx 280 chars)",\n'
     '  "guion_video": "Intro 5seg + desarrollo 20seg + cierre 5seg",\n'
     '  "slug": "titulo-url-friendly-sin-tildes",\n'
@@ -139,32 +146,34 @@ class AIProcessor:
             self.provider, self.model, key_preview,
         )
 
-    def process_article(self, titulo: str, cuerpo: str, seccion: str) -> Dict:
+    def process_article(self, titulo: str, cuerpo: str, seccion: str, fuente: Optional[str] = None) -> Dict:
         """
         Reescribe una noticia usando IA.
-        Retorna dict con: titulo, cuerpo, resumen_seo, instagram_text, twitter_text, guion_video, slug.
+        Retorna dict con: titulo, cuerpo, resumen_seo, instagram_text, instagram_titulo,
+        twitter_text, guion_video, slug.
         Lanza excepción si falla tras todos los reintentos.
         """
         cuerpo = cuerpo[:3000] + "..." if len(cuerpo) > 3000 else cuerpo
-        
+
         user_prompt = (
             f"Sección: {seccion}\n"
             f"Título original: {titulo}\n"
-            f"Cuerpo original:\n{cuerpo}\n"
+            + (f"Fuente original (para atribución opcional, no la copies textualmente): {fuente}\n" if fuente else "")
+            + f"Cuerpo original:\n{cuerpo}\n"
         )
 
         text = self._call_with_retry(user_prompt)
         parsed = self._safe_json_parse(text)
 
         if parsed.get("publicar") is False:
-            logger.info("IA sugirió no publicar: %s | motivo: %s", 
+            logger.info("IA sugirió no publicar: %s | motivo: %s",
                         titulo[:60], parsed.get("motivo", "sin motivo"))
             raise ValueError("IA descartó la nota")
 
         # Validar campos requeridos
         required_fields = [
             "titulo", "cuerpo", "resumen_seo",
-            "instagram_text", "twitter_text", "guion_video",
+            "instagram_text", "instagram_titulo", "twitter_text", "guion_video",
             "slug", "seccion_sugerida",
         ]
         missing = [f for f in required_fields if f not in parsed]
@@ -174,21 +183,23 @@ class AIProcessor:
         logger.info("Artículo procesado OK | provider=%s | slug=%s", self.provider, parsed.get("slug"))
         return parsed
 
-    def process_multi_source(self, titulo: str, textos: List[str], seccion: str) -> Dict:
+    def process_multi_source(self, titulo: str, textos: List[str], seccion: str, fuentes: Optional[List[str]] = None) -> Dict:
         """
         Sintetiza múltiples versiones del mismo hecho en una sola noticia original.
         Recibe una lista de textos de diferentes fuentes sobre el mismo evento.
         """
         textos = [t[:1500] for t in textos]
-        
+
         sources_block = "\n\n--- VERSIÓN SIGUIENTE ---\n\n".join(
             f"[Versión {i+1}]:\n{t}" for i, t in enumerate(textos)
         )
+        fuentes_unicas = sorted({f for f in (fuentes or []) if f})
         user_prompt = (
             f"Sección: {seccion}\n"
             f"Título referencial: {titulo}\n"
-            f"Cantidad de fuentes: {len(textos)}\n\n"
-            f"A continuación las {len(textos)} versiones del mismo hecho:\n\n"
+            f"Cantidad de fuentes: {len(textos)}\n"
+            + (f"Medios de origen (para atribución opcional, no los copies textualmente): {', '.join(fuentes_unicas)}\n" if fuentes_unicas else "")
+            + f"\nA continuación las {len(textos)} versiones del mismo hecho:\n\n"
             f"{sources_block}\n"
         )
 
@@ -197,7 +208,7 @@ class AIProcessor:
 
         required_fields = [
             "titulo", "cuerpo", "resumen_seo",
-            "instagram_text", "twitter_text", "guion_video",
+            "instagram_text", "instagram_titulo", "twitter_text", "guion_video",
             "slug", "seccion_sugerida",
         ]
         missing = [f for f in required_fields if f not in parsed]

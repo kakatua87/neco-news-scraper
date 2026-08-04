@@ -29,7 +29,6 @@ from ai_processor import AIProcessor
 from scraper import NewsScraper
 from services_scraper import ServicesScraper
 from supabase_client import SupabaseNewsClient
-from telegram_bot import TelegramBotClient
 
 # ─── Logging ─────────────────────────────────────────────────────
 if not logging.getLogger().handlers:
@@ -60,6 +59,21 @@ def slug_from_url(url: str, fallback_title: str) -> str:
     base = re.sub(r"[^a-z0-9]+", "-", base)
     base = re.sub(r"-+", "-", base).strip("-")
     return base or "nota"
+
+
+def notify_nuevo_grupo(cantidad_notas: int, seccion: str) -> None:
+    """Avisa al portal (push OneSignal) que hay un grupo nuevo para revisar en /admin."""
+    try:
+        requests.post(
+            f"{config.PORTAL_URL}/api/notificaciones/nuevo-grupo",
+            json={
+                "titulo": "📰 Nuevo grupo de noticias",
+                "cuerpo_corto": f"{cantidad_notas} fuente(s) nueva(s) en {seccion} para revisar.",
+            },
+            timeout=10,
+        )
+    except Exception:
+        logger.warning("No se pudo notificar nuevo grupo al portal.")
 
 
 # ─── Deduplicación semántica por título ──────────────────────────
@@ -166,15 +180,15 @@ def _group_by_similarity(notes: List[Dict], threshold: float = 0.65) -> List[Lis
 
 def pipeline_scraping() -> None:
     """
-    Fase 1: Scrape → Dedup → Supabase (estado=raw) → Telegram notifica grupo.
-    No invoca la IA en ningún momento.
+    Fase 1: Scrape → Dedup → Supabase (estado=raw) → notifica el portal (push).
+    No invoca la IA en ningún momento. La revisión/selección de fuentes, imagen
+    y sección, y el disparo de la Fase 2, se hacen desde /admin (Bandeja de Entrada).
     """
     logger.info("═══ pipeline_scraping v3.0 — inicio ═══")
     try:
         supabase_client = SupabaseNewsClient()
         existing_urls = supabase_client.get_urls_existentes()
         scraper = NewsScraper(existing_urls=existing_urls)
-        telegram = TelegramBotClient(supabase_client=supabase_client)
     except Exception:
         logger.exception("Error inicializando dependencias de pipeline_scraping.")
         return
@@ -259,15 +273,8 @@ def pipeline_scraping() -> None:
             grupo_id, len(notas_insertadas), leader.get("titulo", "")[:60],
         )
 
-        # ── Notificar a Telegram ──────────────────────────────────
-        try:
-            telegram.send_grupo_preview({
-                "grupo_id": grupo_id,
-                "notas": notas_insertadas,
-                "seccion_sugerida": leader.get("seccion", "Local"),
-            })
-        except Exception:
-            logger.exception("Error enviando grupo preview a Telegram grupo_id=%s", grupo_id)
+        # ── Notificar al portal (push) ────────────────────────────
+        notify_nuevo_grupo(len(notas_insertadas), leader.get("seccion", "Local"))
 
         time.sleep(1)  # Pausa mínima entre grupos
 
@@ -289,7 +296,6 @@ def pipeline_ia(
     logger.info("═══ pipeline_ia — grupo_id=%s | fuentes=%s ═══", grupo_id, fuentes_ids)
     try:
         supabase_client = SupabaseNewsClient()
-        telegram = TelegramBotClient(supabase_client=supabase_client)
     except Exception:
         logger.exception("Error inicializando dependencias de pipeline_ia.")
         return {"ok": False, "error": "error de inicialización"}
@@ -311,6 +317,8 @@ def pipeline_ia(
     lider = notas[0]
     titulo = lider.get("titulo", "")
     all_texts = [n["cuerpo"] for n in notas if n.get("cuerpo") and len(n["cuerpo"]) >= 60]
+    fuentes = [n["fuente"] for n in notas if n.get("fuente")]
+    fuente_unica = ", ".join(sorted(set(fuentes))) if fuentes else None
 
     if not all_texts:
         return {"ok": False, "error": "sin contenido suficiente para procesar"}
@@ -327,15 +335,17 @@ def pipeline_ia(
     # Reescritura con IA
     try:
         if len(all_texts) > 1:
-            rewritten = ai.process_multi_source(titulo, all_texts, seccion)
+            rewritten = ai.process_multi_source(titulo, all_texts, seccion, fuentes=fuentes)
         else:
-            rewritten = ai.process_article(titulo, all_texts[0], seccion)
+            rewritten = ai.process_article(titulo, all_texts[0], seccion, fuente=fuente_unica)
     except Exception as e:
         logger.exception("IA falló en pipeline_ia para grupo_id=%s", grupo_id)
         return {"ok": False, "error": f"IA falló: {str(e)[:200]}"}
 
     # Actualizar la nota líder en Supabase (estado=pendiente)
     rewritten["imagen_url"] = best_image
+    if fuente_unica:
+        rewritten["fuente"] = fuente_unica
     noticia_id = lider["id"]
     supabase_client.update_noticia_con_ia(noticia_id, rewritten)
 
@@ -354,19 +364,6 @@ def pipeline_ia(
 
     # Descartar notas raw secundarias del grupo
     supabase_client.delete_notas_raw_del_grupo(grupo_id, excepto_id=noticia_id)
-
-    # Notificar a Telegram para revisión final (send_preview con botones publicar/descartar)
-    noticia_para_telegram = {
-        "id": noticia_id,
-        "titulo": rewritten.get("titulo", titulo),
-        "cuerpo": rewritten.get("cuerpo", ""),
-        "seccion": rewritten.get("seccion_sugerida") or seccion,
-        "imagen_url": rewritten.get("imagen_url"),
-    }
-    try:
-        telegram.send_preview(noticia_para_telegram)
-    except Exception:
-        logger.exception("Error enviando preview final a Telegram id=%s", noticia_id)
 
     logger.info("═══ pipeline_ia finalizado. noticia_id=%s ═══", noticia_id)
     return {"ok": True, "noticia_id": noticia_id}
@@ -391,57 +388,6 @@ def stats() -> Dict:
         return {"error": "no disponible"}
 
 
-@app.post("/telegram/callback")
-async def telegram_callback(request: Request) -> Dict:
-    """Webhook de Telegram para procesar botones inline."""
-    try:
-        body = await request.json()
-    except Exception:
-        return {"ok": False, "error": "json inválido"}
-
-    callback_query = body.get("callback_query")
-    if not callback_query:
-        return {"ok": True}  # Ignorar mensajes normales u otros eventos
-
-    try:
-        data = callback_query.get("data", "")
-        cq_id = callback_query.get("id")
-
-        supabase_client = SupabaseNewsClient()
-        telegram = TelegramBotClient(supabase_client=supabase_client)
-        result = telegram.callback_handler(data, callback_query=callback_query)
-        logger.info("Callback telegram procesado: %s", result)
-
-        # Responder a Telegram (answer para cerrar el loading)
-        if cq_id:
-            token = config.TELEGRAM_BOT_TOKEN
-            action = result.get("action", "")
-            text_map = {
-                "publicada": "✓ Publicada",
-                "descartada": "✕ Descartada",
-                "cambio_seccion": "📂 Sección actualizada",
-                "menu_seccion": "",
-                "volver": "",
-            }
-            answer_text = text_map.get(action, "")
-            payload: Dict = {"callback_query_id": cq_id}
-            if answer_text:
-                payload["text"] = answer_text
-            try:
-                requests.post(
-                    f"https://api.telegram.org/bot{token}/answerCallbackQuery",
-                    json=payload,
-                    timeout=10,
-                )
-            except Exception as e:
-                logger.error("Error enviando answerCallbackQuery: %s", e)
-
-        return result
-    except Exception:
-        logger.exception("Error procesando callback de Telegram.")
-        return {"ok": False}
-
-
 @app.get("/debug-env")
 async def debug_env() -> Dict:
     """Muestra las variables de entorno relevantes (enmascaradas)."""
@@ -453,51 +399,11 @@ async def debug_env() -> Dict:
         return val[:4] + "..." + val[-4:]
 
     return {
-        "TELEGRAM_BOT_TOKEN": mask(config.TELEGRAM_BOT_TOKEN or ""),
-        "TELEGRAM_CHAT_ID": config.TELEGRAM_CHAT_ID or "(VACÍO)",
         "SCRAPER_URL": config.SCRAPER_URL or "(VACÍO)",
         "PORTAL_URL": config.PORTAL_URL or "(VACÍO)",
         "SUPABASE_URL": mask(config.SUPABASE_URL or ""),
         "AI_PROVIDER": config.AI_PROVIDER or "(VACÍO)",
     }
-
-
-@app.post("/test-telegram")
-async def test_telegram() -> Dict:
-    """Envía un mensaje de prueba a Telegram DESDE RENDER para verificar config."""
-    import requests as req
-    token = config.TELEGRAM_BOT_TOKEN
-    chat_id = config.TELEGRAM_CHAT_ID
-
-    if not token or not chat_id:
-        return {
-            "ok": False,
-            "error": "TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID no configurados",
-            "token_set": bool(token),
-            "chat_id_set": bool(chat_id),
-        }
-
-    text = (
-        "🔧 TEST DESDE RENDER\n\n"
-        "Si lees esto, las variables de Telegram en Render están bien.\n"
-        f"Chat ID: {chat_id}\n"
-        f"Token: {token[:8]}...{token[-4:]}"
-    )
-    try:
-        resp = req.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
-            timeout=15,
-        )
-        data = resp.json()
-        return {
-            "ok": data.get("ok", False),
-            "status_code": resp.status_code,
-            "description": data.get("description", ""),
-            "message_id": data.get("result", {}).get("message_id"),
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
 
 
 @app.post("/procesar-grupo")

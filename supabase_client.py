@@ -117,6 +117,15 @@ class SupabaseNewsClient:
         except Exception:
             logger.exception("Error actualizando portada para id=%s", noticia_id)
 
+    def get_scraper_config(self) -> Dict:
+        """Lee la configuración del scraper (activo, fuentes_activas, fecha_inicio) controlada desde /admin."""
+        try:
+            response = self.client.table("scraper_config").select("*").eq("id", 1).single().execute()
+            return response.data or {}
+        except Exception:
+            logger.warning("No se pudo leer scraper_config, se usa comportamiento por defecto (activo, todas las fuentes).")
+            return {"activo": True, "fuentes_activas": None, "fecha_inicio": None}
+
     def get_stats(self) -> Dict:
         """Obtiene estadísticas para el dashboard."""
         try:

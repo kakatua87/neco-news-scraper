@@ -193,20 +193,43 @@ def pipeline_scraping() -> None:
         logger.exception("Error inicializando dependencias de pipeline_scraping.")
         return
 
-    # ── Scraping de todas las fuentes ────────────────────────────
+    # ── Config del scraper (controlada desde /admin) ─────────────
+    cfg = supabase_client.get_scraper_config()
+    if not cfg.get("activo", True):
+        logger.info("Scraper desactivado desde el panel admin. Se salta esta corrida.")
+        return
+
+    fecha_inicio = cfg.get("fecha_inicio")
+    if fecha_inicio:
+        try:
+            from datetime import datetime, timezone
+            dt_inicio = datetime.fromisoformat(str(fecha_inicio).replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) < dt_inicio:
+                logger.info("Scraper programado para %s. Todavía no llegó la fecha.", fecha_inicio)
+                return
+        except Exception:
+            logger.warning("No se pudo interpretar fecha_inicio=%s, se ignora.", fecha_inicio)
+
+    source_map = {
+        "nden": scraper.scrape_nden,
+        "diarionecochea": scraper.scrape_diario_necochea,
+        "diario4v": scraper.scrape_diario4v,
+        "tsn": scraper.scrape_tsn,
+        "diarionq": scraper.scrape_diarionq,
+        "elecos": scraper.scrape_elecos,
+    }
+    fuentes_activas = cfg.get("fuentes_activas") or list(source_map.keys())
+
+    # ── Scraping de las fuentes activas ──────────────────────────
     raw_notes: List[Dict] = []
-    for source_fn in (
-        scraper.scrape_nden,
-        scraper.scrape_diario_necochea,
-        scraper.scrape_diario4v,
-        scraper.scrape_tsn,
-        scraper.scrape_diarionq,
-        scraper.scrape_elecos,
-    ):
+    for key in fuentes_activas:
+        source_fn = source_map.get(key)
+        if not source_fn:
+            continue
         try:
             raw_notes.extend(source_fn())
         except Exception:
-            logger.exception("Error en fuente=%s", source_fn.__name__)
+            logger.exception("Error en fuente=%s", key)
 
     logger.info("Notas candidatas scrapeadas: %s", len(raw_notes))
 

@@ -90,7 +90,7 @@ class NewsScraper:
             title_selector="h2.ftitulo, h3.entry-title a, h3.td-module-title a, h2, h3",
             link_selector="h3.entry-title a, h3.td-module-title a, a",
             image_selector="img.entry-thumb, img.td-image-wrap, img",
-            section_selector=".td-post-category, .entry-category, .category",
+            section_selector=".seccion, .td-post-category, .entry-category, .category",
             fuente="NDEN",
         )
 
@@ -104,7 +104,7 @@ class NewsScraper:
             title_selector="h1, h2, h3",
             link_selector="a",
             image_selector="img",
-            section_selector=".category, .seccion, .tag, .post-category",
+            section_selector=".jeg_post_category, .category, .seccion, .tag, .post-category",
             fuente="Diario Necochea",
         )
 
@@ -118,7 +118,7 @@ class NewsScraper:
             title_selector="h2 a, h3 a, h2, h3",
             link_selector="h2 a, h3 a, a",
             image_selector="img.entry-thumb, img.wp-post-image, img",
-            section_selector=".td-post-category, .category, .seccion",
+            section_selector=".seccion, .td-post-category, .category, .fparrafo",
             fuente="Diario 4V",
         )
 
@@ -132,7 +132,7 @@ class NewsScraper:
             title_selector="h3 a, h2 a, h3, h2",
             link_selector="h3 a, h2 a, a",
             image_selector="img.wp-post-image, img.attachment-post-thumbnail, img",
-            section_selector=".category, .post-category, .seccion",
+            section_selector=".category, .post-category, .seccion, .volanta",
             fuente="TSN Necochea",
         )
 
@@ -146,7 +146,7 @@ class NewsScraper:
             title_selector="h3 a, h1 a, h2 a, h3, h1",
             link_selector="h3 a, h1 a, a",
             image_selector="img.wp-post-image, img.attachment-post-thumbnail, img",
-            section_selector=".category, .post-category, .cat-links a",
+            section_selector=".jeg_post_category, .category, .post-category, .cat-links a",
             fuente="Diario NQ",
         )
 
@@ -160,7 +160,7 @@ class NewsScraper:
             title_selector="h2 a, h3 a, h2, h3",
             link_selector="h2 a, h3 a, a",
             image_selector="img",
-            section_selector=".category, .post-category, a[href*='categoria']",
+            section_selector="[class*='Category_note'], .category, .post-category, a[href*='categoria']",
             fuente="El Ecos",
         )
 

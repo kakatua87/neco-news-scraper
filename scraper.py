@@ -87,7 +87,7 @@ class NewsScraper:
         return self._scrape_homepage(
             base_url=base_url,
             card_selector="article, .td_module_flex, .td-animation-stack, .post",
-            title_selector="h3.entry-title a, h3.td-module-title a, h2, h3",
+            title_selector="h2.ftitulo, h3.entry-title a, h3.td-module-title a, h2, h3",
             link_selector="h3.entry-title a, h3.td-module-title a, a",
             image_selector="img.entry-thumb, img.td-image-wrap, img",
             section_selector=".td-post-category, .entry-category, .category",
@@ -368,10 +368,15 @@ class NewsScraper:
                     url = urljoin(base_url, href)
                     if url.startswith("http"):
                         return titulo, url
-                # Buscar el link más cercano
+                # Buscar el link más cercano: primero chequeamos si el propio
+                # padre YA es el <a> (caso típico: <a><h3>kicker</h3><h2>título</h2></a>),
+                # y si no, recién ahí buscamos entre los descendientes de cada ancestro.
                 parent = el.parent
                 while parent and parent.name != "article":
-                    link = parent.find("a", href=True)
+                    if parent.name == "a" and parent.get("href"):
+                        link = parent
+                    else:
+                        link = parent.find("a", href=True)
                     if link:
                         href = link.get("href", "").strip()
                         if href:
@@ -381,9 +386,12 @@ class NewsScraper:
                     parent = parent.parent
                 break
 
-        # Fallback: link_selector genérico
+        # Fallback: link_selector genérico. Preferimos h2 (título real) antes
+        # que h1/h3/h4, porque muchos sitios locales usan h3 como "kicker"
+        # (etiqueta de sección) antes del título real y select_one tomaría
+        # el primero en orden de documento.
         link_el = card.select_one(link_selector)
-        title_el = card.select_one("h1, h2, h3, h4")
+        title_el = card.select_one("h2") or card.select_one("h1, h3, h4")
         if link_el and title_el:
             href = (link_el.get("href") or "").strip()
             titulo = title_el.get_text(" ", strip=True)

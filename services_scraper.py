@@ -1,50 +1,101 @@
 import logging
 import requests
 import re
-import json
 from bs4 import BeautifulSoup
 from typing import Optional, Dict, List
 from datetime import datetime
 
-import config
-from ai_processor import AIProcessor
 from supabase_client import SupabaseNewsClient
 
 logger = logging.getLogger("neconews.services")
 
 class ServicesScraper:
+    """
+    Scraper de servicios (farmacias de turno, obituarios). No usa IA:
+    solo extrae texto de las fuentes y le da formato — los datos ya vienen
+    completos de origen, no hace falta que nada los "redacte".
+    """
+
     def __init__(self):
         self.headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        self.ai = None
-        try:
-            self.ai = AIProcessor()
-        except Exception as e:
-            logger.warning("IA no disponible para servicios: %s", e)
-            
         self.supabase = SupabaseNewsClient()
 
+    # Línea que contiene solo el número de día (1-31) dentro de la tabla de turnos.
+    _DIA_NUM_RE = re.compile(r'^\d{1,2}$')
+
+    @classmethod
+    def _formatear_farmacias(cls, raw_text: str) -> str:
+        """
+        Da formato de lectura al texto de turnos ya scrapeado, sin IA: separa
+        el encabezado, marca "Turnos del mes de ..." como subtítulo y arma un
+        bloque por día usando la numeración que ya trae la propia tabla.
+        No intenta reconstruir a qué localidad corresponde cada farmacia
+        (columnas ambiguas sin el HTML de la tabla) — mejor mostrar todos los
+        datos del día juntos que asignar mal una farmacia a la localidad
+        equivocada.
+        """
+        lines = [l.strip() for l in raw_text.split("\n") if l.strip()]
+
+        turnos_idx = next(
+            (i for i, l in enumerate(lines) if l.lower().startswith("turnos del mes")), None
+        )
+        if turnos_idx is None:
+            # No se pudo ubicar la tabla: devolver el texto tal cual, limpio.
+            return "\n\n".join(lines)
+
+        bloques = ["\n".join(lines[:turnos_idx]), f"## {lines[turnos_idx]}"]
+
+        i = turnos_idx + 1
+        leyenda = []
+        while i < len(lines) and not cls._DIA_NUM_RE.match(lines[i]):
+            leyenda.append(lines[i])
+            i += 1
+        if leyenda:
+            bloques.append(" · ".join(leyenda))
+
+        dia_actual = None
+        contenido_actual: List[str] = []
+        for line in lines[i:]:
+            if cls._DIA_NUM_RE.match(line):
+                if dia_actual is not None:
+                    bloques.append(f"### Día {dia_actual}\n\n" + " · ".join(contenido_actual))
+                dia_actual = line
+                contenido_actual = []
+            else:
+                contenido_actual.append(line)
+        if dia_actual is not None:
+            bloques.append(f"### Día {dia_actual}\n\n" + " · ".join(contenido_actual))
+
+        return "\n\n".join(bloques)
+
     def fetch_farmacias(self) -> Optional[Dict]:
-        """Scrapea farmacias de turno desde portalnecochea.com.ar"""
+        """Scrapea farmacias de turno desde portalnecochea.com.ar (sin IA)."""
         url = "https://portalnecochea.com.ar/servicios/servicios-esenciales/farmacias-de-turno-en-necochea/"
         try:
             r = requests.get(url, headers=self.headers, timeout=15)
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "html.parser")
-            
-            # El contenido principal suele estar en el entry-content o main
-            content_div = soup.select_one(".entry-content") or soup.select_one("main")
+
+            # El sitio está armado con Elementor; no usa .entry-content/main.
+            # Tomamos el primer bloque .elementor que NO sea header/footer/popup.
+            content_div = None
+            for el in soup.select(".elementor"):
+                classes = el.get("class") or []
+                if any(c.startswith("elementor-location-") for c in classes):
+                    continue
+                content_div = el
+                break
             if not content_div:
                 logger.error("No se encontró el contenido de farmacias en la página.")
                 return None
-            
+
             text = content_div.get_text(separator="\n", strip=True)
-            
-            # Limpiar y formatear con IA
-            formatted_text = self._format_with_ai("Farmacias de turno en Necochea y Quequén", text, "Extraé y presentá la lista de farmacias de turno del día actual de forma clara usando Markdown (listas con viñetas, destacando en negrita el nombre de la farmacia y luego la dirección). No inventes datos.")
-            
-            if not formatted_text:
-                formatted_text = text[:2000] # Fallback
-                
+            if not text or len(text) < 100:
+                logger.error("Texto de farmacias demasiado corto o vacío.")
+                return None
+
+            formatted_text = self._formatear_farmacias(text)
+
             return {
                 "titulo": f"Farmacias de Turno - {datetime.now().strftime('%d/%m/%Y')}",
                 "cuerpo": formatted_text,
@@ -100,109 +151,110 @@ class ServicesScraper:
             logger.error("Error scrapeando obituarios: %s", e)
             return None
 
+    # "Falleció"/"Fallecio" marca de forma confiable el arranque del cuerpo
+    # de un aviso fúnebre. OJO: no usar también "Q.E.P.D." como disparador —
+    # varios avisos ponen "(Q.E.P.D.)" pegado al final de la línea del
+    # nombre, y eso generaría un trigger falso ahí mismo, partiendo el
+    # aviso en dos.
+    _AVISO_TRIGGER_RE = re.compile(r'fallec[ei][oó]?', re.IGNORECASE)
+
+    _MESES_ES = {
+        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+        "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
+        "noviembre": 11, "diciembre": 12,
+    }
+    _MESES_NOMBRE = {v: k.capitalize() for k, v in _MESES_ES.items() if k != "setiembre"}
+
+    # Fecha numérica: D[/-]M[/-]YYYY o YY, con o sin espacios alrededor del
+    # separador. Incluye guión medio/largo (– / —) que aparece en algunos avisos.
+    _FECHA_NUMERICA_RE = re.compile(r'\b(\d{1,2})\s*[/\-–—]\s*(\d{1,2})\s*[/\-–—]\s*(\d{2,4})\b')
+    # Fecha en texto: "D de MES(de)? YYYY"
+    _FECHA_TEXTO_RE = re.compile(
+        r'\b(\d{1,2})\s+de\s+([a-záéíóúñ]+)(?:\s+de)?\s+(\d{4})\b', re.IGNORECASE
+    )
+
+    @classmethod
+    def _extraer_fecha(cls, texto: str) -> Optional[tuple]:
+        """Busca la primera fecha válida (año, mes) dentro de un aviso fúnebre."""
+        mejor: Optional[tuple] = None
+        mejor_pos = len(texto) + 1
+
+        m = cls._FECHA_TEXTO_RE.search(texto)
+        if m:
+            dia_str, mes_str, anio_str = m.groups()
+            mes = cls._MESES_ES.get(mes_str.lower())
+            if mes:
+                mejor = (int(anio_str), mes)
+                mejor_pos = m.start()
+
+        for m in cls._FECHA_NUMERICA_RE.finditer(texto):
+            if m.start() >= mejor_pos:
+                continue
+            dia_str, mes_str, anio_str = m.groups()
+            try:
+                dia, mes, anio = int(dia_str), int(mes_str), int(anio_str)
+            except ValueError:
+                continue
+            if not (1 <= dia <= 31 and 1 <= mes <= 12):
+                continue
+            if anio < 100:
+                anio += 2000
+            mejor = (anio, mes)
+            mejor_pos = m.start()
+            break  # ya encontramos una fecha numérica más temprana que cualquier candidata previa
+
+        return mejor
+
     def _group_obituarios_by_month(self, raw_text: str) -> Optional[List[Dict]]:
-        """Usa IA para parsear cada aviso fúnebre, detectar su fecha y agruparlo por mes."""
-        if not self.ai:
-            logger.error("IA no disponible para agrupar obituarios.")
-            return None
-        
-        system_prompt = (
-            "Sos un asistente de procesamiento de datos para un diario digital. "
-            "Tu tarea es analizar un texto largo con múltiples avisos fúnebres y agruparlos por MES y AÑO.\n\n"
-            "INSTRUCCIONES:\n"
-            "1. Cada aviso fúnebre comienza con el APELLIDO en mayúsculas seguido de la descripción.\n"
-            "2. Detectá la fecha de fallecimiento de cada aviso (puede estar en formatos como 'Falleció el 08-05-2026', "
-            "'Falleció el día 4 de mayo de 2026', 'Falleció el 01/05/2026', etc.)\n"
-            "3. Agrupá los avisos por mes y año.\n"
-            "4. SOLO incluí avisos del año 2026.\n"
-            "5. Para cada grupo mensual, formateá los avisos en Markdown respetuoso.\n"
-            "6. Devolvé ÚNICAMENTE un JSON array con esta estructura (sin texto extra):\n"
-            '[\n'
-            '  {\n'
-            '    "mes": 5,\n'
-            '    "mes_nombre": "Mayo",\n'
-            '    "anio": 2026,\n'
-            '    "cantidad": 7,\n'
-            '    "contenido": "### APELLIDO, Nombre\\nFalleció el ...\\n\\n### APELLIDO2, Nombre2\\nFalleció el ..."\n'
-            '  }\n'
-            ']\n\n'
-            "REGLAS:\n"
-            "- NO inventes datos. Si no podés detectar la fecha, omití ese aviso.\n"
-            "- Ordená los meses de mayor a menor (mayo primero, enero último).\n"
-            "- En 'contenido', usá ### para cada nombre y un párrafo con los detalles.\n"
-            "- NO incluyas avisos de 2025 u otros años.\n"
-            "- Devolvé SOLO el JSON, sin bloques de código ni explicaciones."
-        )
-        
-        text_to_send = raw_text[:4500]
-        
-        user_prompt = f"Texto crudo de necrológicas:\n{text_to_send}"
-        
-        try:
-            response = self.ai.client.chat.completions.create(
-                model=self.ai.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.1,
-                max_tokens=4000,
-            )
-            result_text = (response.choices[0].message.content or "").strip()
-            
-            # Limpiar posibles bloques de código markdown
-            if result_text.startswith("```"):
-                result_text = re.sub(r'^```\w*\n?', '', result_text)
-                result_text = re.sub(r'\n?```$', '', result_text)
-            
-            grouped = json.loads(result_text)
-            
-            if not isinstance(grouped, list):
-                logger.error("La IA no devolvió un array válido.")
-                return None
-                
-            logger.info("IA agrupó %d meses de obituarios.", len(grouped))
-            return grouped
-            
-        except json.JSONDecodeError as e:
-            logger.error("Error parseando JSON de IA: %s", e)
-            logger.debug("Respuesta de IA: %s", result_text[:500] if result_text else "vacío")
-            return None
-        except Exception as e:
-            logger.error("Error en IA para agrupar obituarios: %s", e)
+        """
+        Agrupa los avisos fúnebres por mes/año sin usar IA: solo extrae el
+        texto ya scrapeado y le da formato. Cada aviso trae sus propios datos
+        reales (nombre, fecha) — no hace falta que nada los "redacte".
+        """
+        lines = [l.strip() for l in raw_text.split("\n")]
+        lines = [l for l in lines if l]  # descartar líneas vacías
+
+        trigger_idx = [i for i, l in enumerate(lines) if self._AVISO_TRIGGER_RE.search(l)]
+        if not trigger_idx:
+            logger.error("No se detectaron avisos fúnebres (patrón Q.E.P.D./Falleció) en el texto.")
             return None
 
-    def _format_with_ai(self, title: str, text: str, instructions: str) -> Optional[str]:
-        if not self.ai:
+        entries = []
+        for n, idx in enumerate(trigger_idx):
+            if idx == 0:
+                continue  # no hay línea anterior para usar como nombre
+            nombre = lines[idx - 1]
+            body_end = (trigger_idx[n + 1] - 1) if n + 1 < len(trigger_idx) else len(lines)
+            cuerpo_aviso = "\n".join(lines[idx:body_end]).strip()
+            if not cuerpo_aviso:
+                continue
+            fecha = self._extraer_fecha(cuerpo_aviso)
+            if not fecha:
+                logger.debug("No se pudo detectar fecha para el aviso de '%s', se omite.", nombre)
+                continue
+            entries.append({"nombre": nombre, "cuerpo": cuerpo_aviso, "anio": fecha[0], "mes": fecha[1]})
+
+        if not entries:
+            logger.error("No se pudo extraer ninguna fecha válida de los avisos fúnebres.")
             return None
-            
-        system_prompt = (
-            "Sos un asistente de procesamiento de datos para Neco News. "
-            "Tu única tarea es tomar un texto crudo scrapeado de la web y extraer la información útil "
-            "formateándola en un documento Markdown limpio y estético.\n\n"
-            f"INSTRUCCIONES ESPECÍFICAS: {instructions}\n\n"
-            "REGLAS:\n"
-            "1. NO devuelvas un JSON, devuelve directamente el contenido Markdown.\n"
-            "2. NO inventes ningún dato. Si el texto no tiene información útil, responde con un mensaje breve indicando que no hay datos disponibles.\n"
-            "3. NO agregues introducciones como 'Aquí tienes la lista'. Empieza directamente con el contenido."
-        )
-        
-        user_prompt = f"Título de referencia: {title}\nTexto crudo:\n{text[:4000]}"
-        
-        try:
-            response = self.ai.client.chat.completions.create(
-                model=self.ai.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.3,
-                max_tokens=1500,
-            )
-            return (response.choices[0].message.content or "").strip()
-        except Exception as e:
-            logger.error("Error en AI formatting: %s", e)
-            return None
+
+        grupos: Dict[tuple, List[Dict]] = {}
+        for e in entries:
+            grupos.setdefault((e["anio"], e["mes"]), []).append(e)
+
+        resultado = []
+        for (anio, mes), avisos in sorted(grupos.items(), reverse=True):
+            contenido = "\n\n".join(f"### {a['nombre']}\n\n{a['cuerpo']}" for a in avisos)
+            resultado.append({
+                "mes": mes,
+                "mes_nombre": self._MESES_NOMBRE.get(mes, str(mes)),
+                "anio": anio,
+                "cantidad": len(avisos),
+                "contenido": contenido,
+            })
+
+        logger.info("Agrupados %d meses de obituarios (sin IA).", len(resultado))
+        return resultado
 
     def update_services(self):
         """Ejecuta el scraper de servicios y actualiza la BD."""

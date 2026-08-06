@@ -246,6 +246,8 @@ class SupabaseNewsClient:
             }
             if datos_ia.get("fuente"):
                 update_data["fuente"] = datos_ia["fuente"]
+            if datos_ia.get("fuentes_urls"):
+                update_data["fuentes_urls"] = datos_ia["fuentes_urls"]
             self.client.table("noticias") \
                 .update(update_data) \
                 .eq("id", noticia_id) \

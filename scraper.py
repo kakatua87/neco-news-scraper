@@ -28,12 +28,13 @@ logger = logging.getLogger("neconews.scraper")
 # Cada entrada: (selector_contenido, selector_fallback)
 DOMAIN_CONTENT_SELECTORS: Dict[str, List[str]] = {
     "nden.com.ar": [
+        "div.wysiwyg.texto_nota",
+        "div.texto_nota",
         "div.td-post-content",
         "div.entry-content",
         "div.post-content",
         "article.post .td-post-content",
         "div.tdb-block-inner",
-        "article",
     ],
     "diarionecochea.com": [
         "div.nota-cuerpo",
@@ -179,9 +180,12 @@ class NewsScraper:
                 page.wait_for_timeout(1500)
                 html = page.content()
                 text = self._extract_article_text(html, domain=domain)
-                
-                self._validate_coherence(url, html, text)
-                
+
+                if not self._validate_coherence(url, html, text):
+                    fallback = self._extract_meta_fallback(BeautifulSoup(html, "html.parser"))
+                    if fallback:
+                        text = fallback
+
                 og_image = self._extract_og_image(html, url)
                 content_image = self._extract_content_image(html, domain, url)
                 return {"text": text, "og_image": og_image, "content_image": content_image}
@@ -201,9 +205,12 @@ class NewsScraper:
                     html = page.content()
                     domain = self._get_domain(url)
                     text = self._extract_article_text(html, domain=domain)
-                    
-                    self._validate_coherence(url, html, text)
-                    
+
+                    if not self._validate_coherence(url, html, text):
+                        fallback = self._extract_meta_fallback(BeautifulSoup(html, "html.parser"))
+                        if fallback:
+                            text = fallback
+
                     og_image = self._extract_og_image(html, url)
                     content_image = self._extract_content_image(html, domain, url)
                     results.append({
@@ -221,11 +228,16 @@ class NewsScraper:
             browser.close()
         return results
 
-    def _validate_coherence(self, url: str, html: str, text: str) -> None:
-        """Valida que el texto extraído contenga al menos 20% de las palabras del título."""
+    def _validate_coherence(self, url: str, html: str, text: str) -> bool:
+        """Valida que el texto extraído contenga al menos 20% de las palabras del título.
+
+        Retorna False si detecta una probable desincronización título/cuerpo
+        (p. ej. el selector de contenido cayó en un widget compartido en vez
+        del artículo real), True en caso contrario.
+        """
         if not text:
-            return
-            
+            return True
+
         soup = BeautifulSoup(html, "html.parser")
         title_tag = soup.title
         titulo = title_tag.get_text() if title_tag else ""
@@ -234,7 +246,7 @@ class NewsScraper:
             titulo = h1.get_text() if h1 else ""
 
         if not titulo:
-            return
+            return True
 
         stopwords = {"el", "la", "los", "las", "de", "del", "en", "un", "una",
                      "y", "a", "que", "se", "con", "por", "es", "su", "al",
@@ -246,6 +258,8 @@ class NewsScraper:
             matches = sum(1 for token in title_tokens if token in text_lower)
             if (matches / len(title_tokens)) < 0.2:
                 logger.warning("Posible desincronización título/cuerpo: %s", url)
+                return False
+        return True
 
     @staticmethod
     def get_wikimedia_image(query: str) -> Optional[str]:

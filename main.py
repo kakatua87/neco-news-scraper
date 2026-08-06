@@ -12,10 +12,12 @@ API: FastAPI con /health, /telegram/callback, /procesar-grupo, /run, /run-servic
 
 import argparse
 import logging
+import math
 import re
 import sys
 import time
 import uuid
+from collections import Counter
 from typing import Dict, List, Optional
 
 import requests
@@ -83,6 +85,13 @@ _STOPWORDS = frozenset({
     "se", "con", "por", "es", "su", "al", "lo", "le", "esta", "este", "son",
     "ha", "fue", "para", "como", "más", "no", "ya", "sin", "ante", "sobre",
     "pero", "sus", "muy", "ser", "hasta", "hay", "entre",
+    # Interrogativos/pronombres con tilde (headlines tipo "Cómo anotarse",
+    # "Cuándo se juega", "Qué días estará"): no distinguen tema, y sin esto
+    # "cómo" no matcheaba contra "como" (sin tilde) y colaba como palabra
+    # de contenido.
+    "cómo", "cuándo", "qué", "cuál", "cuáles", "quién", "quiénes", "dónde",
+    "también", "así", "aún", "según", "desde", "todo", "toda", "todos",
+    "todas", "otro", "otra", "otros", "otras",
 })
 
 
@@ -92,25 +101,62 @@ def _normalize_title(title: str) -> set:
     return {t for t in clean.split() if t not in _STOPWORDS and len(t) > 2}
 
 
-def _jaccard(a: set, b: set) -> float:
-    """Similaridad de Jaccard entre dos conjuntos de tokens."""
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
-
-
-def _group_by_similarity(notes: List[Dict], threshold: float = 0.65) -> List[List[Dict]]:
+def _group_by_similarity(
+    notes: List[Dict],
+    threshold: float = 0.40,
+    gray_zone_threshold: float = 0.25,
+) -> List[List[Dict]]:
     """
     Agrupa noticias sobre el mismo hecho usando similaridad contextual.
 
-    Criterios para agrupar (TODOS deben cumplirse):
-    1. Similaridad Jaccard de tokens >= threshold
-    2. Comparten al menos UNA entidad concreta (nombre propio, número, lugar)
-    3. La sección temática es compatible
+    Distintos portales casi nunca redactan un título igual para el mismo hecho
+    (ver relevamiento de 2026-08-05: de 28 pares reales de duplicados entre
+    fuentes, un Jaccard simple con umbral 0.65 solo detectaba 2). Por eso
+    usamos un "overlap coefficient" ponderado por rareza de palabra (idf-like,
+    calculado sobre el propio lote de notas scrapeadas): las palabras que
+    aparecen en muchos títulos del día (p. ej. "necochea", "gobierno",
+    "secuestran") pesan poco, y las palabras distintivas de un hecho puntual
+    (nombres propios, "practicaje", "baliza", "Auditórium") pesan mucho.
+
+    Criterios para agrupar (basta con UNO):
+    1. Similaridad ponderada >= threshold (fuerte por sí sola)
+    2. Similaridad ponderada >= gray_zone_threshold Y comparten >= 2 entidades
+       concretas (nombres propios, números, lugares) — cubre títulos muy
+       reescritos que igual comparten los datos puntuales del hecho.
+    Además, la sección temática debe ser compatible en ambos casos.
     """
+    # Lugares/gentilicios que aparecen en casi cualquier título de un portal
+    # hiperlocal (Necochea/Quequén/región): por sí solos no indican que dos
+    # notas hablen del mismo hecho, así que no deben aportar al score de
+    # similitud (sí se conservan como señal débil en extract_entities).
+    LOW_SIGNAL_WORDS = {
+        "necochea", "quequén", "quequen", "mar", "plata", "argentina",
+        "buenos", "aires", "provincia", "nacional", "país", "region",
+        "región", "san",
+    }
+
     groups: List[List[Dict]] = []
     used = set()
     tokens = [_normalize_title(n.get("titulo", "")) for n in notes]
+    sig_tokens = [t - LOW_SIGNAL_WORDS for t in tokens]
+
+    n_notes = len(notes)
+    doc_freq: Counter = Counter()
+    for tok_set in sig_tokens:
+        doc_freq.update(tok_set)
+
+    def idf(tok: str) -> float:
+        return math.log((n_notes + 1) / (doc_freq.get(tok, 0) + 1)) + 1.0
+
+    MIN_TOKENS = 4  # títulos muy cortos (kickers tipo "PRONÓSTICO") no son comparables
+
+    def weighted_overlap(a: set, b: set) -> float:
+        if len(a) < MIN_TOKENS or len(b) < MIN_TOKENS:
+            return 0.0
+        inter = a & b
+        w_inter = sum(idf(t) for t in inter)
+        w_min = min(sum(idf(t) for t in a), sum(idf(t) for t in b))
+        return w_inter / w_min if w_min else 0.0
 
     SECTION_GROUPS = [
         {"Deportes"},
@@ -133,8 +179,8 @@ def _group_by_similarity(notes: List[Dict], threshold: float = 0.65) -> List[Lis
     def extract_entities(title: str) -> set:
         numbers = set(re.findall(r'\b\d+(?:[.,]\d+)?\b', title))
         words = title.split()
-        capitalized = {w for w in words[1:] if w and w[0].isupper()
-                       and len(w) > 2 and w.lower() not in _STOPWORDS}
+        capitalized = {w.lower() for w in words[1:] if w and w[0].isupper()
+                       and len(w) > 3 and w.lower() not in _STOPWORDS}
         LUGARES = {"necochea", "quequén", "quequen", "lobería", "loberia",
                    "san cayetano", "miramar", "tres arroyos", "claromecó",
                    "ruta 88", "ruta 11", "ruta 3"}
@@ -142,27 +188,30 @@ def _group_by_similarity(notes: List[Dict], threshold: float = 0.65) -> List[Lis
         lugares_found = {l for l in LUGARES if l in text_lower}
         return numbers | capitalized | lugares_found
 
+    entities = [extract_entities(n.get("titulo", "")) for n in notes]
+
     for i, note in enumerate(notes):
         if i in used:
             continue
         group = [note]
         used.add(i)
-        entities_i = extract_entities(note.get("titulo", ""))
         section_i = note.get("seccion", "Local")
 
         for j in range(i + 1, len(notes)):
             if j in used:
                 continue
-            sim = _jaccard(tokens[i], tokens[j])
-            if sim < threshold:
-                continue
             section_j = notes[j].get("seccion", "Local")
             if not sections_compatible(section_i, section_j):
                 continue
-            entities_j = extract_entities(notes[j].get("titulo", ""))
-            shared_entities = entities_i & entities_j
-            if not shared_entities:
+
+            sim = weighted_overlap(sig_tokens[i], sig_tokens[j])
+            shared_entities = entities[i] & entities[j]
+
+            strong_match = sim >= threshold
+            gray_zone_match = sim >= gray_zone_threshold and len(shared_entities) >= 2
+            if not (strong_match or gray_zone_match):
                 continue
+
             logger.info(
                 "Agrupadas (sim=%.2f, entidades=%s):\n  [A] %s\n  [B] %s",
                 sim, shared_entities,
@@ -343,6 +392,15 @@ def pipeline_ia(
     fuentes = [n["fuente"] for n in notas if n.get("fuente")]
     fuente_unica = ", ".join(sorted(set(fuentes))) if fuentes else None
 
+    # Guardamos fuente+URL de cada nota seleccionada: las secundarias se
+    # marcan como 'descartada' más abajo y perderían su URL si no la
+    # conserváramos acá.
+    fuentes_urls = [
+        {"fuente": n.get("fuente", ""), "url": n.get("url_original")}
+        for n in notas
+        if n.get("url_original")
+    ]
+
     if not all_texts:
         return {"ok": False, "error": "sin contenido suficiente para procesar"}
 
@@ -367,6 +425,7 @@ def pipeline_ia(
 
     # Actualizar la nota líder en Supabase (estado=pendiente)
     rewritten["imagen_url"] = best_image
+    rewritten["fuentes_urls"] = fuentes_urls
     if fuente_unica:
         rewritten["fuente"] = fuente_unica
     noticia_id = lider["id"]

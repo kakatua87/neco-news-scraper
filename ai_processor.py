@@ -33,15 +33,21 @@ SYSTEM_PROMPT = (
     "ESTRUCTURA DEL CUERPO:\n"
     "- LEAD (siempre primero, sin subtítulo): las 5W en 2-3 oraciones densas. "
     "Qué, quién, cuándo, dónde, por qué importa. El dato más relevante va primero.\n"
-    "- DESARROLLO: contexto, antecedentes, cifras, declaraciones. Si la nota tiene "
-    "tela para cortar (2 o más temas distintos dentro del desarrollo, o fuentes "
-    "múltiples con datos de distinto tipo), dividilo en 2 a 4 bloques temáticos, "
-    "cada uno con un subtítulo corto y concreto (nunca genérico tipo 'Contexto' o "
-    "'Más detalles' — describí de qué habla ese bloque puntual, como haría un "
-    "diario real). Marcá cada subtítulo con '## ' al inicio de su propia línea, "
-    "seguido de un párrafo en blanco y después el/los párrafo/s de ese bloque. "
-    "Para una nota corta o simple (resultado deportivo, agenda, aviso breve) "
-    "alcanza con el lead y uno o dos párrafos sueltos, sin forzar subtítulos.\n"
+    "- DESARROLLO: contexto, antecedentes, cifras, declaraciones. NO comprimas de "
+    "más — el original suele traer más datos de los que entran en un resumen "
+    "mínimo (nombres, cifras exactas, declaraciones textuales, antecedentes, "
+    "cronología del hecho); retenelos todos los que sean relevantes en vez de "
+    "quedarte con lo justo y necesario. El objetivo no es un resumen, es una "
+    "nota completa. Si la nota tiene tela para cortar (2 o más temas distintos "
+    "dentro del desarrollo, o fuentes múltiples con datos de distinto tipo), "
+    "dividilo en 2 a 4 bloques temáticos, cada uno con un subtítulo corto y "
+    "concreto (nunca genérico tipo 'Contexto' o 'Más detalles' — describí de "
+    "qué habla ese bloque puntual, como haría un diario real). Marcá cada "
+    "subtítulo con '## ' al inicio de su propia línea, seguido de un párrafo "
+    "en blanco y después el/los párrafo/s de ese bloque. Para una nota corta o "
+    "simple (resultado deportivo, agenda, aviso breve) alcanza con el lead y "
+    "uno o dos párrafos sueltos, sin forzar subtítulos ni estirar contenido "
+    "que el original no tiene.\n"
     "- CIERRE (último bloque, con o sin subtítulo según corresponda): impacto "
     "concreto para el lector necochense. Podés incluir perspectiva editorial "
     "cuando el hecho lo amerite — una pregunta abierta, una consecuencia "
@@ -70,7 +76,11 @@ SYSTEM_PROMPT = (
     "cortar el hilo narrativo.\n"
     "- Si falta un dato para que la historia cierre (quién, cuándo, cuánto), "
     "decilo explícitamente ('todavía no se confirmó...', 'no trascendió...') "
-    "en lugar de omitirlo en silencio o inventarlo para que 'cierre mejor'.\n\n"
+    "en lugar de omitirlo en silencio o inventarlo para que 'cierre mejor'.\n"
+    "- Todo subtítulo ('## ') va SIEMPRE seguido de al menos un párrafo de "
+    "desarrollo debajo. Nunca termines el cuerpo en un subtítulo sin texto, y "
+    "nunca metas una oración larga adentro de un subtítulo — el subtítulo es "
+    "un título corto (4-8 palabras), no una frase del cuerpo.\n\n"
 
     "REGLAS DE ESTILO:\n"
     "1. Reescribí completamente. Cero frases copiadas del original.\n"
@@ -136,13 +146,19 @@ MULTI_SOURCE_PROMPT = (
     "una lista de datos de cada fuente pegados en orden.\n"
     "- Si las versiones se contradicen en un dato central y no podés "
     "resolverlo con el resto del texto, señalalo con una frase explícita en "
-    "vez de elegir una versión al azar o mezclarlas en un promedio inventado.\n\n"
+    "vez de elegir una versión al azar o mezclarlas en un promedio inventado.\n"
+    "- Todo subtítulo ('## ') va siempre seguido de al menos un párrafo de "
+    "desarrollo debajo; nunca termines el cuerpo en un subtítulo sin texto, y "
+    "el subtítulo tiene que ser corto (4-8 palabras), no una oración del cuerpo.\n\n"
 
     "ESTRUCTURA DEL CUERPO:\n"
     "- Lead (siempre primero, sin subtítulo): el hecho central verificado en "
     "todas las fuentes.\n"
-    "- Desarrollo: los datos cruzados más relevantes y el contexto. Al combinar "
-    "varias fuentes suele haber más de un ángulo (el hecho en sí, reacciones, "
+    "- Desarrollo: los datos cruzados más relevantes y el contexto. No lo "
+    "reduzcas a lo mínimo indispensable — combinar varias fuentes te da más "
+    "material del habitual (cifras, nombres, declaraciones, antecedentes de "
+    "cada versión), aprovechalo en vez de comprimir. Al combinar varias "
+    "fuentes suele haber más de un ángulo (el hecho en sí, reacciones, "
     "antecedentes, cifras) — cuando eso pasa, dividí el desarrollo en 2 a 4 "
     "bloques con subtítulo propio y concreto (no genérico), marcado con "
     "'## ' al inicio de línea seguido de línea en blanco y el párrafo. Si las "
@@ -208,7 +224,7 @@ class AIProcessor:
         twitter_text, guion_video, slug.
         Lanza excepción si falla tras todos los reintentos.
         """
-        cuerpo = cuerpo[:3000] + "..." if len(cuerpo) > 3000 else cuerpo
+        cuerpo = cuerpo[:4500] + "..." if len(cuerpo) > 4500 else cuerpo
 
         user_prompt = (
             f"Sección: {seccion}\n"
@@ -243,7 +259,7 @@ class AIProcessor:
         Sintetiza múltiples versiones del mismo hecho en una sola noticia original.
         Recibe una lista de textos de diferentes fuentes sobre el mismo evento.
         """
-        textos = [t[:1500] for t in textos]
+        textos = [t[:2200] for t in textos]
 
         sources_block = "\n\n--- VERSIÓN SIGUIENTE ---\n\n".join(
             f"[Versión {i+1}]:\n{t}" for i, t in enumerate(textos)
@@ -289,7 +305,12 @@ class AIProcessor:
                         {"role": "user", "content": user_prompt},
                     ],
                     temperature=0.65,
-                    max_tokens=2500,
+                    max_tokens=3200,
+                    # Fuerza salida JSON válida a nivel de decoding — sin esto,
+                    # el modelo a veces mete saltos de línea sin escapar
+                    # dentro de un string (p. ej. alrededor de los "## "
+                    # subtítulos) y rompe el parseo.
+                    response_format={"type": "json_object"},
                 )
 
                 text = (response.choices[0].message.content or "").strip()

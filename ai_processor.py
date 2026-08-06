@@ -200,18 +200,32 @@ class AIProcessor:
     Compatible con cualquier API que siga el formato OpenAI.
     """
 
-    def __init__(self) -> None:
-        if not config.AI_API_KEY:
-            raise ValueError("AI_API_KEY es obligatoria. Configurala en .env")
+    def __init__(self, provider: Optional[str] = None) -> None:
+        """
+        Si se pasa `provider`, se usa la config de ESE proveedor (API key,
+        modelo, base_url) en vez del AI_PROVIDER por defecto — siempre que
+        tenga API key configurada. Si no se pasa nada, comportamiento
+        idéntico al de siempre (proveedor default de config.py).
+        """
+        if provider:
+            cfg = config.get_provider_config(provider)
+            if not cfg:
+                raise ValueError(f"Proveedor de IA '{provider}' no está configurado (falta su API key).")
+            self.provider = cfg["provider"]
+            self.model = cfg["model"]
+            api_key = cfg["api_key"]
+            base_url = cfg["base_url"]
+        else:
+            if not config.AI_API_KEY:
+                raise ValueError("AI_API_KEY es obligatoria. Configurala en .env")
+            self.provider = config.AI_PROVIDER
+            self.model = config.AI_MODEL
+            api_key = config.AI_API_KEY
+            base_url = config.AI_BASE_URL
 
-        self.provider = config.AI_PROVIDER
-        self.model = config.AI_MODEL
-        self.client = OpenAI(
-            api_key=config.AI_API_KEY,
-            base_url=config.AI_BASE_URL,
-        )
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
 
-        key_preview = f"{config.AI_API_KEY[:8]}...{config.AI_API_KEY[-4:]}" if len(config.AI_API_KEY) >= 12 else "***"
+        key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) >= 12 else "***"
         logger.info(
             "AI inicializado | provider=%s | model=%s | key=%s",
             self.provider, self.model, key_preview,

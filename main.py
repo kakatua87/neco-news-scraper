@@ -360,12 +360,15 @@ def pipeline_ia(
     fuentes_ids: List[str],
     imagen_url: Optional[str],
     seccion: str,
+    provider: Optional[str] = None,
 ) -> Dict:
     """
     Fase 2: Lee notas raw del grupo → IA → actualiza líder → limpia secundarias.
+    `provider` es opcional: si se pasa, usa ese proveedor de IA en vez del
+    default (ver GET /ai-providers para la lista de proveedores configurados).
     Retorna {"ok": True, "noticia_id": id} o {"ok": False, "error": msg}.
     """
-    logger.info("═══ pipeline_ia — grupo_id=%s | fuentes=%s ═══", grupo_id, fuentes_ids)
+    logger.info("═══ pipeline_ia — grupo_id=%s | fuentes=%s | provider=%s ═══", grupo_id, fuentes_ids, provider or "default")
     try:
         supabase_client = SupabaseNewsClient()
     except Exception:
@@ -374,7 +377,7 @@ def pipeline_ia(
 
     # Inicializar IA
     try:
-        ai = AIProcessor()
+        ai = AIProcessor(provider=provider)
     except Exception:
         logger.exception("IA no disponible.")
         return {"ok": False, "error": "IA no disponible"}
@@ -488,11 +491,18 @@ async def debug_env() -> Dict:
     }
 
 
+@app.get("/ai-providers")
+async def ai_providers() -> Dict:
+    """Lista los proveedores de IA con API key configurada (para el selector del admin)."""
+    return {"providers": config.list_available_providers()}
+
+
 @app.post("/procesar-grupo")
 async def procesar_grupo(request: Request) -> Dict:
     """
     Activa la Fase 2 (IA) para un grupo de notas raw.
-    Body: { grupo_id, fuentes_ids: [id1, id2, ...], imagen_url?, seccion? }
+    Body: { grupo_id, fuentes_ids: [id1, id2, ...], imagen_url?, seccion?, provider? }
+    `provider` es opcional (ver GET /ai-providers); si no se manda, usa el default.
     """
     try:
         body = await request.json()
@@ -503,6 +513,7 @@ async def procesar_grupo(request: Request) -> Dict:
     fuentes_ids: List[str] = body.get("fuentes_ids", [])
     imagen_url: Optional[str] = body.get("imagen_url")
     seccion: str = body.get("seccion", "Local")
+    provider: Optional[str] = (body.get("provider") or "").strip() or None
 
     if not grupo_id:
         return {"ok": False, "error": "grupo_id es obligatorio"}
@@ -510,7 +521,7 @@ async def procesar_grupo(request: Request) -> Dict:
         return {"ok": False, "error": "fuentes_ids no puede estar vacío"}
 
     try:
-        result = pipeline_ia(grupo_id, fuentes_ids, imagen_url, seccion)
+        result = pipeline_ia(grupo_id, fuentes_ids, imagen_url, seccion, provider=provider)
         return result
     except Exception as e:
         logger.exception("Error en /procesar-grupo grupo_id=%s", grupo_id)

@@ -25,19 +25,38 @@ AI_API_KEY: str = os.getenv("AI_API_KEY", "").strip()
 AI_MODEL: str = os.getenv("AI_MODEL", "").strip()
 AI_BASE_URL: str = os.getenv("AI_BASE_URL", "").strip()
 
-# Defaults por proveedor
+# Defaults por proveedor. "label" y "gratis" son solo para mostrar en el
+# selector del panel admin (GET /ai-providers).
 _PROVIDER_DEFAULTS = {
     "groq": {
         "model": "llama-3.3-70b-versatile",
         "base_url": "https://api.groq.com/openai/v1",
+        "label": "Groq (Llama 3.3 70B)",
+        "gratis": True,
+    },
+    "gemini": {
+        "model": "gemini-2.0-flash",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "label": "Google Gemini 2.0 Flash",
+        "gratis": True,
+    },
+    "openrouter": {
+        "model": "meta-llama/llama-3.3-70b-instruct:free",
+        "base_url": "https://openrouter.ai/api/v1",
+        "label": "OpenRouter (Llama 3.3 70B free)",
+        "gratis": True,
     },
     "openai": {
         "model": "gpt-4o-mini",
         "base_url": "https://api.openai.com/v1",
+        "label": "OpenAI (GPT-4o mini)",
+        "gratis": False,
     },
     "anthropic": {
         "model": "claude-sonnet-4-5",
         "base_url": "https://api.anthropic.com/v1",
+        "label": "Anthropic (Claude Sonnet)",
+        "gratis": False,
     },
 }
 
@@ -49,6 +68,50 @@ if AI_PROVIDER in _PROVIDER_DEFAULTS:
         AI_BASE_URL = defaults["base_url"]
 else:
     logger.warning("AI_PROVIDER=%s no reconocido. Asegurate de setear AI_MODEL y AI_BASE_URL.", AI_PROVIDER)
+
+# API key por proveedor: cada uno puede tener la suya propia
+# (GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, ...). Si no está seteada
+# pero ese proveedor es el AI_PROVIDER activo, cae a AI_API_KEY — así el
+# setup actual (un solo AI_API_KEY para el proveedor por defecto) sigue
+# funcionando sin tocar nada.
+def _api_key_for(provider: str) -> str:
+    specific = os.getenv(f"{provider.upper()}_API_KEY", "").strip()
+    if specific:
+        return specific
+    return AI_API_KEY if provider == AI_PROVIDER else ""
+
+PROVIDER_API_KEYS: dict = {p: _api_key_for(p) for p in _PROVIDER_DEFAULTS}
+
+
+def get_provider_config(provider: str) -> "dict | None":
+    """Config completa de un proveedor si tiene API key configurada, sino None."""
+    defaults = _PROVIDER_DEFAULTS.get(provider)
+    api_key = PROVIDER_API_KEYS.get(provider, "")
+    if not defaults or not api_key:
+        return None
+    return {
+        "provider": provider,
+        "model": AI_MODEL if provider == AI_PROVIDER else defaults["model"],
+        "base_url": AI_BASE_URL if provider == AI_PROVIDER else defaults["base_url"],
+        "api_key": api_key,
+        "label": defaults["label"],
+    }
+
+
+def list_available_providers() -> list:
+    """Proveedores con API key configurada, para el selector del admin."""
+    result = []
+    for p in _PROVIDER_DEFAULTS:
+        cfg = get_provider_config(p)
+        if cfg:
+            result.append({
+                "provider": cfg["provider"],
+                "model": cfg["model"],
+                "label": cfg["label"],
+                "gratis": _PROVIDER_DEFAULTS[p]["gratis"],
+                "default": p == AI_PROVIDER,
+            })
+    return result
 
 # ─── Telegram ────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()

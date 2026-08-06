@@ -456,9 +456,13 @@ def pipeline_ia(
 
 # ─── Endpoints ───────────────────────────────────────────────────
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health() -> Dict[str, str]:
-    """Health check para UptimeRobot / Render."""
+    """
+    Health check para UptimeRobot / Render. Acepta GET y HEAD — el tier
+    gratuito de UptimeRobot pega con HEAD por defecto, y FastAPI no lo
+    habilita automáticamente solo con @app.get (devolvía 405).
+    """
     return {"status": "ok", "service": "neco-news-scraper", "version": "3.0.0"}
 
 

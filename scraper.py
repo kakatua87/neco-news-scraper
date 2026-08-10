@@ -584,7 +584,8 @@ class NewsScraper:
             "/wp-content/", "/feed/", "/page/", "#",
             "/publicidad/", "/aviso/", "/contacto/", "/quienes-somos/",
             "/politicas-de-privacidad/", "/seccion/", "/categoria/",
-            "/edicion-impresa", "/cdn-cgi/", "/ultimas-noticias/"
+            "/edicion-impresa", "/cdn-cgi/", "/ultimas-noticias/",
+            "/necrologicas", "/necrologica", "/obituario", "/avisos-funebres",
         ]
         return any(token in lowered for token in blocked_keywords)
 

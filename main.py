@@ -103,8 +103,8 @@ def _normalize_title(title: str) -> set:
 
 def _group_by_similarity(
     notes: List[Dict],
-    threshold: float = 0.40,
-    gray_zone_threshold: float = 0.25,
+    threshold: float = 0.32,  # antes 0.40 — más sensible
+    gray_zone_threshold: float = 0.20,  # antes 0.25
 ) -> List[List[Dict]]:
     """
     Agrupa noticias sobre el mismo hecho usando similaridad contextual.
@@ -161,8 +161,7 @@ def _group_by_similarity(
     SECTION_GROUPS = [
         {"Deportes"},
         {"Policiales"},
-        {"Política", "Local"},
-        {"Economía"},
+        {"Política", "Local", "Economía"},  # Economía fusionada con Política/Local
         {"Sociedad", "Salud", "Cultura"},
     ]
 

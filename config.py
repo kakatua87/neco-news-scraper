@@ -131,6 +131,13 @@ ADMIN_URL: str = f"{PORTAL_URL}/admin"
 # a /procesar-grupo. Por defecto apunta a sí mismo (localhost en dev).
 SCRAPER_URL: str = os.getenv("SCRAPER_URL", "http://localhost:8000").strip()
 
+# Secreto compartido entre este servicio y el portal Next.js (neco-news),
+# usado en llamadas server-to-server sin sesión de usuario: protege los
+# endpoints de control del scraper (/run, /procesar-grupo, etc.) y el envío
+# de notificaciones push desde este servicio hacia el portal. Debe tener el
+# mismo valor en ambos deploys (Render y Vercel).
+INTERNAL_API_SECRET: str = os.getenv("INTERNAL_API_SECRET", "").strip()
+
 # ─── Branding ─────────────────────────────────────────────────────
 PORTAL_NAME: str = "Neco Now"
 
@@ -144,6 +151,12 @@ def validate() -> bool:
         errors.append("SUPABASE_KEY")
     if not AI_API_KEY:
         errors.append("AI_API_KEY")
+    if not INTERNAL_API_SECRET:
+        logger.warning(
+            "INTERNAL_API_SECRET no configurado: los endpoints de control "
+            "(/run, /procesar-grupo, etc.) quedarán bloqueados para todos "
+            "hasta que lo definas (debe coincidir con el del portal Next.js)."
+        )
 
     if errors:
         logger.error(

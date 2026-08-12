@@ -48,25 +48,24 @@ class TelegramBotClient:
         keyboard = []
 
         # Fila por nota: toggle de selección
-        for nota in notas:
+        for i, nota in enumerate(notas):
             nota_id = nota.get("id", "")
             fuente = nota.get("fuente", "Fuente")[:18]
             tick = "✓" if nota_id in seleccionadas else "○"
             keyboard.append([{
                 "text": f"{tick} {fuente}",
-                "callback_data": f"toggle_{grupo_id}_{nota_id}",
+                "callback_data": f"tog_{grupo_id}_{i}",
             }])
 
         # Botones de imagen (una fila por nota que tenga imagen)
-        notas_con_imagen = [n for n in notas if n.get("imagen_url")]
-        if notas_con_imagen:
-            for nota in notas_con_imagen:
+        for i, nota in enumerate(notas):
+            if nota.get("imagen_url"):
                 nota_id = nota.get("id", "")
                 fuente = nota.get("fuente", "Fuente")[:12]
                 activa = "✅" if nota_id == imagen_id else "🖼"
                 keyboard.append([{
                     "text": f"{activa} Imagen: {fuente}",
-                    "callback_data": f"img_{grupo_id}_{nota_id}",
+                    "callback_data": f"img_{grupo_id}_{i}",
                 }])
 
         # Sección y acciones
@@ -246,16 +245,26 @@ class TelegramBotClient:
         # ── Parseo de action e IDs ────────────────────────────────────
 
         # Orden importa: prefijos más específicos primero
-        if data.startswith("toggle_"):
-            # toggle_{grupo_id}_{nota_id}  — grupo_id es UUID (36 chars con guiones)
-            rest = data[len("toggle_"):]
-            grupo_id, nota_id = self._split_uuid_prefix(rest)
-            return self._handle_toggle(grupo_id, nota_id, chat_id, message_id)
+        if data.startswith("tog_"):
+            # tog_{grupo_id}_{index}
+            rest = data[len("tog_"):]
+            grupo_id, idx_str = self._split_uuid_prefix(rest)
+            if idx_str.isdigit():
+                estado = self.grupos_estado.get(grupo_id)
+                if estado and 0 <= int(idx_str) < len(estado["notas"]):
+                    nota_id = estado["notas"][int(idx_str)]["id"]
+                    return self._handle_toggle(grupo_id, nota_id, chat_id, message_id)
+            return {"ok": False, "error": "toggle inválido"}
 
         elif data.startswith("img_"):
             rest = data[len("img_"):]
-            grupo_id, nota_id = self._split_uuid_prefix(rest)
-            return self._handle_img(grupo_id, nota_id, chat_id, message_id)
+            grupo_id, idx_str = self._split_uuid_prefix(rest)
+            if idx_str.isdigit():
+                estado = self.grupos_estado.get(grupo_id)
+                if estado and 0 <= int(idx_str) < len(estado["notas"]):
+                    nota_id = estado["notas"][int(idx_str)]["id"]
+                    return self._handle_img(grupo_id, nota_id, chat_id, message_id)
+            return {"ok": False, "error": "img inválido"}
 
         elif data.startswith("sec_grupo_set_"):
             # sec_grupo_set_{grupo_id}_{seccion}
@@ -477,6 +486,7 @@ class TelegramBotClient:
                     "imagen_url": imagen_url,
                     "seccion": seccion,
                 },
+                headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
                 timeout=120,
             )
             result = resp.json()

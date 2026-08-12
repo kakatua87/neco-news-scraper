@@ -23,7 +23,7 @@ from typing import Dict, List, Optional
 import requests
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 import uvicorn
 
 import config
@@ -72,6 +72,7 @@ def notify_nuevo_grupo(cantidad_notas: int, seccion: str) -> None:
                 "titulo": "📰 Nuevo grupo de noticias",
                 "cuerpo_corto": f"{cantidad_notas} fuente(s) nueva(s) en {seccion} para revisar.",
             },
+            headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
             timeout=10,
         )
     except Exception:
@@ -455,6 +456,17 @@ def pipeline_ia(
 
 # ─── Endpoints ───────────────────────────────────────────────────
 
+def require_internal_secret(authorization: str = Header(default="")) -> None:
+    """
+    Protege los endpoints de control de este servicio (no hay sesión de
+    usuario acá, es server-to-server con el portal Next.js). Si el secreto
+    no está configurado, deniega por defecto en vez de dejar todo abierto.
+    """
+    esperado = config.INTERNAL_API_SECRET
+    if not esperado or authorization != f"Bearer {esperado}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health() -> Dict[str, str]:
     """
@@ -465,7 +477,7 @@ def health() -> Dict[str, str]:
     return {"status": "ok", "service": "neco-news-scraper", "version": "3.0.0"}
 
 
-@app.get("/stats")
+@app.get("/stats", dependencies=[Depends(require_internal_secret)])
 def stats() -> Dict:
     """Estadísticas rápidas para el dashboard."""
     try:
@@ -476,7 +488,7 @@ def stats() -> Dict:
         return {"error": "no disponible"}
 
 
-@app.get("/debug-env")
+@app.get("/debug-env", dependencies=[Depends(require_internal_secret)])
 async def debug_env() -> Dict:
     """Muestra las variables de entorno relevantes (enmascaradas)."""
     def mask(val: str) -> str:
@@ -494,13 +506,13 @@ async def debug_env() -> Dict:
     }
 
 
-@app.get("/ai-providers")
+@app.get("/ai-providers", dependencies=[Depends(require_internal_secret)])
 async def ai_providers() -> Dict:
     """Lista los proveedores de IA con API key configurada (para el selector del admin)."""
     return {"providers": config.list_available_providers()}
 
 
-@app.post("/procesar-grupo")
+@app.post("/procesar-grupo", dependencies=[Depends(require_internal_secret)])
 async def procesar_grupo(request: Request) -> Dict:
     """
     Activa la Fase 2 (IA) para un grupo de notas raw.
@@ -531,7 +543,7 @@ async def procesar_grupo(request: Request) -> Dict:
         return {"ok": False, "error": str(e)}
 
 
-@app.post("/run")
+@app.post("/run", dependencies=[Depends(require_internal_secret)])
 async def manual_run() -> Dict:
     """Ejecuta pipeline_scraping() manualmente (para debug)."""
     try:
@@ -542,7 +554,7 @@ async def manual_run() -> Dict:
         return {"ok": False, "error": str(e)}
 
 
-@app.post("/run-services")
+@app.post("/run-services", dependencies=[Depends(require_internal_secret)])
 async def manual_run_services() -> Dict:
     """Ejecuta el pipeline de servicios manualmente."""
     try:
@@ -553,7 +565,7 @@ async def manual_run_services() -> Dict:
         return {"ok": False, "error": str(e)}
 
 
-@app.post("/limpieza")
+@app.post("/limpieza", dependencies=[Depends(require_internal_secret)])
 async def manual_limpieza() -> Dict:
     """Descartar notas viejas pendientes sin grupo y limpiar base de datos."""
     try:

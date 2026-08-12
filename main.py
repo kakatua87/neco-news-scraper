@@ -13,6 +13,7 @@ API: FastAPI con /health, /telegram/callback, /procesar-grupo, /run, /run-servic
 import argparse
 import logging
 import math
+import random
 import re
 import sys
 import time
@@ -271,10 +272,12 @@ def pipeline_scraping() -> None:
 
     # ── Scraping de las fuentes activas ──────────────────────────
     raw_notes: List[Dict] = []
-    for key in fuentes_activas:
+    for i, key in enumerate(fuentes_activas):
         source_fn = source_map.get(key)
         if not source_fn:
             continue
+        if i > 0:
+            time.sleep(random.uniform(2.0, 6.0))
         try:
             raw_notes.extend(source_fn())
         except Exception:
@@ -587,11 +590,14 @@ async def manual_limpieza() -> Dict:
 
 @app.on_event("startup")
 def on_startup() -> None:
-    # Fase 1: scraping sin IA, cada N minutos
+    # Fase 1: scraping sin IA, cada N minutos. jitter agrega hasta +/-3 min de
+    # variación aleatoria a cada disparo, para no golpear las fuentes siempre
+    # al segundo exacto (patrón de cron perfecto = fácil de detectar como bot).
     scheduler.add_job(
         pipeline_scraping,
         trigger="interval",
         minutes=config.SCHEDULER_INTERVAL_MINUTES,
+        jitter=180,
         id="scraping_pipeline",
         replace_existing=True,
     )

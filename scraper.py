@@ -14,7 +14,9 @@ Selectores específicos por dominio para máxima calidad de contenido.
 """
 
 import logging
+import random
 import re
+import time
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse, quote
 
@@ -23,6 +25,33 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 logger = logging.getLogger("neconews.scraper")
+
+# Contexto de navegador con huella de un Chrome de escritorio real en vez del
+# default de Playwright headless (que se identifica fácilmente: UA distinto,
+# viewport chico, sin locale/timezone). No es indetectable, pero deja de ser
+# el fingerprint de bot más obvio en cualquier log o herramienta anti-bot.
+BROWSER_CONTEXT_KWARGS = dict(
+    user_agent=(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+    viewport={"width": 1366, "height": 768},
+    locale="es-AR",
+    timezone_id="America/Argentina/Buenos_Aires",
+)
+
+
+def _pausa_humana(min_s: float = 0.8, max_s: float = 2.5) -> None:
+    """Demora aleatoria entre requests para no tener un patrón de timing perfecto."""
+    time.sleep(random.uniform(min_s, max_s))
+
+
+def _nuevo_contexto(browser):
+    """Contexto con la huella de Chrome real y sin la señal más obvia de
+    automatización (navigator.webdriver=true por defecto en Playwright)."""
+    context = browser.new_context(**BROWSER_CONTEXT_KWARGS)
+    context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+    return context
 
 # ─── Selectores específicos por dominio ─────────────────────────────────────
 # Cada entrada: (selector_contenido, selector_fallback)
@@ -174,7 +203,7 @@ class NewsScraper:
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            page = _nuevo_contexto(browser).new_page()
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(1500)
@@ -197,8 +226,11 @@ class NewsScraper:
         results = []
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            for url in urls:
-                page = browser.new_page()
+            context = _nuevo_contexto(browser)
+            for i, url in enumerate(urls):
+                if i > 0:
+                    _pausa_humana()
+                page = context.new_page()
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     page.wait_for_timeout(1500)
@@ -305,7 +337,7 @@ class NewsScraper:
         seen: Set[str] = set()
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            page = _nuevo_contexto(browser).new_page()
             try:
                 page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(1500)

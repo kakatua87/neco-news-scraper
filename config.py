@@ -138,6 +138,16 @@ SCRAPER_URL: str = os.getenv("SCRAPER_URL", "http://localhost:8000").strip()
 # mismo valor en ambos deploys (Render y Vercel).
 INTERNAL_API_SECRET: str = os.getenv("INTERNAL_API_SECRET", "").strip()
 
+# ─── Proxy rotativo (Webshare u otro compatible) ──────────────────
+# PROXY_LIST: "host:puerto,host:puerto,..." — una IP se elige al azar por
+# request. Mismo usuario/clave para todas (plan free de Webshare). Si falla
+# un proxy (banda agotada, timeout, auth) el scraper cae a conexión directa
+# en vez de romper el pipeline — ver scraper.py:_abrir_pagina.
+PROXY_ENABLED: bool = os.getenv("PROXY_ENABLED", "false").strip().lower() == "true"
+PROXY_LIST: list = [p.strip() for p in os.getenv("PROXY_LIST", "").split(",") if p.strip()]
+PROXY_USERNAME: str = os.getenv("PROXY_USERNAME", "").strip()
+PROXY_PASSWORD: str = os.getenv("PROXY_PASSWORD", "").strip()
+
 # ─── Branding ─────────────────────────────────────────────────────
 PORTAL_NAME: str = "Neco Now"
 
@@ -157,6 +167,13 @@ def validate() -> bool:
             "(/run, /procesar-grupo, etc.) quedarán bloqueados para todos "
             "hasta que lo definas (debe coincidir con el del portal Next.js)."
         )
+    if PROXY_ENABLED and not (PROXY_LIST and PROXY_USERNAME and PROXY_PASSWORD):
+        logger.warning(
+            "PROXY_ENABLED=true pero falta PROXY_LIST/PROXY_USERNAME/PROXY_PASSWORD. "
+            "El scraper va a usar conexión directa (sin proxy) hasta que los definas."
+        )
+    elif PROXY_ENABLED:
+        logger.info("Proxy rotativo activo: %s IPs configuradas.", len(PROXY_LIST))
 
     if errors:
         logger.error(

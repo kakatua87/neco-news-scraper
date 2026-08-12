@@ -22,7 +22,9 @@ from urllib.parse import urljoin, urlparse, quote
 
 import httpx
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Browser, Page, sync_playwright
+
+import config
 
 logger = logging.getLogger("neconews.scraper")
 
@@ -46,12 +48,54 @@ def _pausa_humana(min_s: float = 0.8, max_s: float = 2.5) -> None:
     time.sleep(random.uniform(min_s, max_s))
 
 
-def _nuevo_contexto(browser):
+def _elegir_proxy() -> Optional[dict]:
+    """Elige un proxy al azar del pool configurado (Webshare free u otro).
+    None si el proxy está desactivado o falta configuración."""
+    if not (config.PROXY_ENABLED and config.PROXY_LIST and config.PROXY_USERNAME and config.PROXY_PASSWORD):
+        return None
+    host_puerto = random.choice(config.PROXY_LIST)
+    return {
+        "server": f"http://{host_puerto}",
+        "username": config.PROXY_USERNAME,
+        "password": config.PROXY_PASSWORD,
+    }
+
+
+def _nuevo_contexto(browser: Browser, proxy: Optional[dict] = None):
     """Contexto con la huella de Chrome real y sin la señal más obvia de
     automatización (navigator.webdriver=true por defecto en Playwright)."""
-    context = browser.new_context(**BROWSER_CONTEXT_KWARGS)
+    context = browser.new_context(proxy=proxy, **BROWSER_CONTEXT_KWARGS)
     context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
     return context
+
+
+def _abrir_pagina(browser: Browser, url: str, timeout: int = 30000, forzar_directo: bool = False) -> Tuple[Page, "object", bool]:
+    """
+    Abre `url` en una página nueva, usando un proxy rotativo si está
+    configurado. Si el proxy falla al conectar (banda agotada, timeout, auth
+    caída) reintenta una vez con conexión directa en vez de romper el
+    pipeline. Devuelve (page, context, proxy_usado) — quien llama es
+    responsable de cerrar el context, y puede usar proxy_usado para decidir
+    si vale la pena reintentar por contenido sospechoso (ver
+    _scrape_homepage: los proxies free a veces "conectan bien" pero
+    devuelven una página de challenge/vacía en vez del sitio real).
+    """
+    proxy = None if forzar_directo else _elegir_proxy()
+    context = _nuevo_contexto(browser, proxy=proxy)
+    page = context.new_page()
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+        return page, context, proxy is not None
+    except Exception as e:
+        if proxy is None:
+            raise
+        logger.warning("Proxy %s falló para %s (%s) — reintentando directo.", proxy["server"], url, e)
+        page.close()
+        context.close()
+        context = _nuevo_contexto(browser, proxy=None)
+        page = context.new_page()
+        page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+        return page, context, False
 
 # ─── Selectores específicos por dominio ─────────────────────────────────────
 # Cada entrada: (selector_contenido, selector_fallback)
@@ -203,9 +247,8 @@ class NewsScraper:
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = _nuevo_contexto(browser).new_page()
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                page, _ctx, _ = _abrir_pagina(browser, url)
                 page.wait_for_timeout(1500)
                 html = page.content()
                 text = self._extract_article_text(html, domain=domain)
@@ -226,13 +269,12 @@ class NewsScraper:
         results = []
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = _nuevo_contexto(browser)
             for i, url in enumerate(urls):
                 if i > 0:
                     _pausa_humana()
-                page = context.new_page()
+                context = None
                 try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    page, context, _ = _abrir_pagina(browser, url)
                     page.wait_for_timeout(1500)
                     html = page.content()
                     domain = self._get_domain(url)
@@ -253,10 +295,11 @@ class NewsScraper:
                     })
                 except Exception as e:
                     logger.warning("Error extrayendo %s: %s", url, e)
-                    results.append({"url": url, "text": "", "og_image": None, 
+                    results.append({"url": url, "text": "", "og_image": None,
                                     "content_image": None})
                 finally:
-                    page.close()
+                    if context is not None:
+                        context.close()
             browser.close()
         return results
 
@@ -337,13 +380,27 @@ class NewsScraper:
         seen: Set[str] = set()
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = _nuevo_contexto(browser).new_page()
             try:
-                page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
+                page, ctx, proxy_usado = _abrir_pagina(browser, base_url)
                 page.wait_for_timeout(1500)
                 html = page.content()
                 soup = BeautifulSoup(html, "html.parser")
                 cards = soup.select(card_selector)
+
+                # Los proxies free comparten IP con miles de usuarios: a veces
+                # "conectan bien" (sin excepción) pero el sitio devuelve una
+                # página de challenge/bloqueo vacía en vez del contenido real.
+                # Si no encontramos ninguna card y veníamos por proxy,
+                # reintentamos una vez directo antes de rendirnos.
+                if not cards and proxy_usado:
+                    logger.warning("Proxy devolvió 0 cards en %s, reintentando directo.", base_url)
+                    page.close()
+                    ctx.close()
+                    page, ctx, _ = _abrir_pagina(browser, base_url, forzar_directo=True)
+                    page.wait_for_timeout(1500)
+                    html = page.content()
+                    soup = BeautifulSoup(html, "html.parser")
+                    cards = soup.select(card_selector)
 
                 for card in cards:
                     # Extraer título y link con múltiples selectores

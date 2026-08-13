@@ -268,6 +268,15 @@ def pipeline_scraping() -> None:
         "diarionq": scraper.scrape_diarionq,
         "elecos": scraper.scrape_elecos,
     }
+
+    # Fuentes agregadas a mano desde /admin (Configuración > Fuentes de
+    # Noticias). No tienen selectores propios, usan scrape_generic().
+    for f in cfg.get("fuentes_custom") or []:
+        key, label, url = f.get("key"), f.get("label"), f.get("url")
+        if not (key and label and url):
+            continue
+        source_map[key] = (lambda u=url, l=label: scraper.scrape_generic(u, l))
+
     fuentes_activas = cfg.get("fuentes_activas") or list(source_map.keys())
 
     # ── Scraping de las fuentes activas ──────────────────────────

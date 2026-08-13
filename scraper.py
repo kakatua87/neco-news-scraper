@@ -153,6 +153,25 @@ class NewsScraper:
     def __init__(self, existing_urls: Optional[Set[str]] = None) -> None:
         self.existing_urls = existing_urls or set()
 
+    def scrape_generic(self, url: str, fuente: str) -> List[Dict]:
+        """
+        Scrapea la homepage de un sitio agregado manualmente desde /admin, sin
+        selectores propios. Usa los selectores más amplios que ya funcionan en
+        varias de las 6 fuentes hardcodeadas (temas tipo WordPress/Newspaper:
+        article/.post/.entry con h1-h3 y links). No tiene la precisión de un
+        selector afinado a mano, pero cubre razonablemente el caso común.
+        """
+        logger.info("Scrapeando homepage genérica: %s (%s)", fuente, url)
+        return self._scrape_homepage(
+            base_url=url,
+            card_selector="article, .post, .entry, .item, .nota, .td_module_flex, .td-animation-stack",
+            title_selector="h1, h2, h3",
+            link_selector="a",
+            image_selector="img",
+            section_selector=".category, .seccion, .tag, .post-category, .entry-category, .td-post-category",
+            fuente=fuente,
+        )
+
     def scrape_nden(self) -> List[Dict]:
         """Scrapea la homepage de NDEN."""
         base_url = "https://nden.com.ar"

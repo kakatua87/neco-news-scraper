@@ -33,26 +33,39 @@ SYSTEM_PROMPT = (
     "ESTRUCTURA DEL CUERPO:\n"
     "- LEAD (siempre primero, sin subtítulo): las 5W en 2-3 oraciones densas. "
     "Qué, quién, cuándo, dónde, por qué importa. El dato más relevante va primero.\n"
-    "- DESARROLLO: contexto, antecedentes, cifras, declaraciones. NO comprimas de "
-    "más — el original suele traer más datos de los que entran en un resumen "
-    "mínimo (nombres, cifras exactas, declaraciones textuales, antecedentes, "
-    "cronología del hecho); retenelos todos los que sean relevantes en vez de "
-    "quedarte con lo justo y necesario. El objetivo no es un resumen, es una "
-    "nota completa. Si la nota tiene tela para cortar (2 o más temas distintos "
-    "dentro del desarrollo, o fuentes múltiples con datos de distinto tipo), "
-    "dividilo en 2 a 4 bloques temáticos, cada uno con un subtítulo corto y "
-    "concreto (nunca genérico tipo 'Contexto' o 'Más detalles' — describí de "
-    "qué habla ese bloque puntual, como haría un diario real). Marcá cada "
-    "subtítulo con '## ' al inicio de su propia línea, seguido de un párrafo "
-    "en blanco y después el/los párrafo/s de ese bloque. Para una nota corta o "
-    "simple (resultado deportivo, agenda, aviso breve) alcanza con el lead y "
-    "uno o dos párrafos sueltos, sin forzar subtítulos ni estirar contenido "
-    "que el original no tiene.\n"
-    "- CIERRE (último bloque, con o sin subtítulo según corresponda): impacto "
-    "concreto para el lector necochense. Podés incluir perspectiva editorial "
-    "cuando el hecho lo amerite — una pregunta abierta, una consecuencia "
-    "probable, o el dato que falta y que el lector debería exigir. Esto no es "
-    "opinión partidaria: es periodismo de servicio con criterio.\n\n"
+    "- DESARROLLO: contexto, antecedentes, cifras, declaraciones. Antes de "
+    "escribir, identificá mentalmente TODOS los datos distintos del original: "
+    "cifras exactas, nombres propios (personas, instituciones, consultoras, "
+    "medios citados), fechas, declaraciones textuales, antecedentes. Cada uno "
+    "de esos datos tiene que aparecer en el cuerpo final — omitir alguno sin "
+    "una razón editorial real (que sea redundante con otro ya incluido) es un "
+    "error. Si el original menciona 4 consultoras con sus 4 cifras, las 4 van "
+    "en el cuerpo, no un rango resumido tipo 'entre 1,8% y 2,8%'. El objetivo "
+    "no es un resumen, es una nota completa. Si la nota tiene tela para cortar "
+    "(2 o más temas distintos dentro del desarrollo, o fuentes múltiples con "
+    "datos de distinto tipo), dividilo en 2 a 4 bloques temáticos, cada uno "
+    "con un subtítulo corto y concreto (nunca genérico tipo 'Contexto' o 'Más "
+    "detalles' — describí de qué habla ese bloque puntual, como haría un "
+    "diario real). Marcá cada subtítulo con '## ' al inicio de su propia "
+    "línea, seguido de un párrafo en blanco y después el/los párrafo/s de ese "
+    "bloque. Para una nota corta o simple (resultado deportivo, agenda, aviso "
+    "breve) alcanza con el lead y uno o dos párrafos sueltos, sin forzar "
+    "subtítulos ni estirar contenido que el original no tiene.\n"
+    "- CIERRE (último párrafo, natural, sin subtítulo forzado): es la "
+    "continuación lógica del desarrollo, no un anexo aparte pegado al final. "
+    "Terminá con el dato, la consecuencia o el próximo paso más relevante que "
+    "surja del propio material. NUNCA termines con una frase que podrías "
+    "pegar sin cambios en cualquier otra nota de cualquier otro tema ('esto "
+    "afecta a los vecinos', 'impacta en la economía local', 'es importante "
+    "para la comunidad', 'permitirá mejorar la calidad de vida', 'es "
+    "importante que el Gobierno tome medidas'). Si el hecho tiene una "
+    "repercusión local CONCRETA Y ESPECÍFICA que valga la pena señalar (con "
+    "nombre, cifra o consecuencia puntual), incluila; si no la tiene, "
+    "simplemente cerrá con el último dato sustancial de la fuente. Forzar un "
+    "cierre de 'impacto en Necochea' o 'impacto en la economía' en notas que "
+    "no lo ameritan (estadísticas nacionales, anuncios institucionales sin "
+    "implicancia directa, resultados deportivos) es exactamente lo que hay "
+    "que evitar.\n\n"
 
     "CUÁNDO AGREGAR PERSPECTIVA EDITORIAL:\n"
     "- Cuando hay datos contradictorios o información incompleta de las fuentes\n"
@@ -95,6 +108,10 @@ SYSTEM_PROMPT = (
     "frases genéricas de relleno ('un hecho relevante', 'la situación preocupa'). "
     "Variá la construcción de las oraciones — evitá que dos párrafos seguidos "
     "arranquen con la misma estructura sintáctica.\n"
+    "6b. Prohibido el relleno metadiscursivo ('es importante destacar', 'cabe "
+    "señalar', 'hay que tener en cuenta', 'resulta relevante mencionar', 'es "
+    "importante que'). Si algo importa, mostralo con el dato — no anuncies "
+    "que importa.\n"
     "7. Slug URL-friendly: minúsculas, sin tildes, guiones, máx 60 chars.\n"
     "8. Devolvé SOLO JSON válido. Sin markdown, sin texto extra (la ÚNICA excepción "
     "es el campo 'cuerpo', que sí puede contener líneas '## Subtítulo' como se "
@@ -154,17 +171,27 @@ MULTI_SOURCE_PROMPT = (
     "ESTRUCTURA DEL CUERPO:\n"
     "- Lead (siempre primero, sin subtítulo): el hecho central verificado en "
     "todas las fuentes.\n"
-    "- Desarrollo: los datos cruzados más relevantes y el contexto. No lo "
-    "reduzcas a lo mínimo indispensable — combinar varias fuentes te da más "
-    "material del habitual (cifras, nombres, declaraciones, antecedentes de "
-    "cada versión), aprovechalo en vez de comprimir. Al combinar varias "
-    "fuentes suele haber más de un ángulo (el hecho en sí, reacciones, "
-    "antecedentes, cifras) — cuando eso pasa, dividí el desarrollo en 2 a 4 "
-    "bloques con subtítulo propio y concreto (no genérico), marcado con "
-    "'## ' al inicio de línea seguido de línea en blanco y el párrafo. Si las "
-    "fuentes solo aportan un ángulo único y acotado, un par de párrafos sin "
-    "subtítulos alcanza — no los fuerces.\n"
-    "- Cierre: impacto local y perspectiva si el hecho lo amerita.\n\n"
+    "- Desarrollo: los datos cruzados más relevantes y el contexto. Antes de "
+    "escribir, identificá mentalmente TODOS los datos distintos entre todas "
+    "las versiones (cifras, nombres propios, fechas, declaraciones, "
+    "antecedentes) — combinar varias fuentes te da más material del "
+    "habitual, aprovechalo en vez de comprimir. Si distintas versiones "
+    "mencionan 4 cifras o nombres distintos de la misma categoría (ej. 4 "
+    "consultoras, 4 testigos), las 4 van en el cuerpo, no un resumen "
+    "genérico. Al combinar varias fuentes suele haber más de un ángulo (el "
+    "hecho en sí, reacciones, antecedentes, cifras) — cuando eso pasa, "
+    "dividí el desarrollo en 2 a 4 bloques con subtítulo propio y concreto "
+    "(no genérico), marcado con '## ' al inicio de línea seguido de línea en "
+    "blanco y el párrafo. Si las fuentes solo aportan un ángulo único y "
+    "acotado, un par de párrafos sin subtítulos alcanza — no los fuerces.\n"
+    "- Cierre (natural, sin subtítulo forzado): el dato o consecuencia más "
+    "relevante que surja del propio material cruzado, nunca una frase "
+    "genérica de 'impacto en la comunidad' que podría pegarse en cualquier "
+    "otra nota ('esto afecta a los vecinos', 'impacta en la economía local', "
+    "'es importante para la comunidad'). Si hay una repercusión local "
+    "concreta y específica, incluila; si no, cerrá con el último dato "
+    "sustancial. Forzar un cierre de impacto local en notas que no lo "
+    "ameritan es exactamente lo que hay que evitar.\n\n"
 
     "REGLAS:\n"
     "1. Cero frases copiadas de ninguna fuente.\n"
@@ -174,7 +201,9 @@ MULTI_SOURCE_PROMPT = (
     "Si no te doy fuentes, no las inventes.\n"
     "3. Voz activa, tono rioplatense, rigor periodístico.\n"
     "4. Priorizá datos concretos por sobre relleno genérico. Variá la sintaxis "
-    "entre párrafos — no repitas la misma estructura de oración dos veces seguidas.\n"
+    "entre párrafos — no repitas la misma estructura de oración dos veces seguidas. "
+    "Prohibido el relleno metadiscursivo ('es importante destacar', 'cabe señalar', "
+    "'hay que tener en cuenta', 'resulta relevante mencionar', 'es importante que').\n"
     "5. Solo JSON válido como respuesta (excepto las líneas '## Subtítulo' dentro "
     "de 'cuerpo', que son el único marcador permitido).\n\n"
 
@@ -204,8 +233,9 @@ class AIProcessor:
         """
         Si se pasa `provider`, se usa la config de ESE proveedor (API key,
         modelo, base_url) en vez del AI_PROVIDER por defecto — siempre que
-        tenga API key configurada. Si no se pasa nada, comportamiento
-        idéntico al de siempre (proveedor default de config.py).
+        tenga API key configurada. Si no se pasa nada, usa el proveedor
+        default de config.py (AI_PROVIDER), tomando su API key específica
+        (ej. GEMINI_API_KEY) o AI_API_KEY como fallback genérico.
         """
         if provider:
             cfg = config.get_provider_config(provider)
@@ -216,20 +246,49 @@ class AIProcessor:
             api_key = cfg["api_key"]
             base_url = cfg["base_url"]
         else:
-            if not config.AI_API_KEY:
-                raise ValueError("AI_API_KEY es obligatoria. Configurala en .env")
+            api_key = config.PROVIDER_API_KEYS.get(config.AI_PROVIDER, "")
+            if not api_key:
+                raise ValueError(
+                    f"Falta la API key del proveedor activo ({config.AI_PROVIDER}). "
+                    f"Configurá AI_API_KEY o {config.AI_PROVIDER.upper()}_API_KEY en .env"
+                )
             self.provider = config.AI_PROVIDER
             self.model = config.AI_MODEL
-            api_key = config.AI_API_KEY
             base_url = config.AI_BASE_URL
 
+        # Gemini: si hay más de una API key cargada (GEMINI_API_KEY,
+        # GEMINI_API_KEY_2, GEMINI_API_KEY_3), quedan disponibles para rotar
+        # sola cuando una se queda sin cuota — ver _call_with_retry().
+        self._fallback_keys: List[str] = (
+            list(config.GEMINI_API_KEYS) if self.provider == "gemini" and len(config.GEMINI_API_KEYS) > 1 else []
+        )
+        self._key_index = 0
+        if self._fallback_keys:
+            api_key = self._fallback_keys[0]
+
+        self.base_url = base_url
         self.client = OpenAI(api_key=api_key, base_url=base_url)
 
         key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) >= 12 else "***"
         logger.info(
-            "AI inicializado | provider=%s | model=%s | key=%s",
+            "AI inicializado | provider=%s | model=%s | key=%s%s",
             self.provider, self.model, key_preview,
+            f" | {len(self._fallback_keys)} keys disponibles con fallback" if self._fallback_keys else "",
         )
+
+    def _rotar_a_siguiente_key(self) -> bool:
+        """Cambia self.client a la siguiente API key de Gemini disponible.
+        Devuelve False si ya no quedan más keys para probar."""
+        if self._key_index + 1 >= len(self._fallback_keys):
+            return False
+        self._key_index += 1
+        nueva_key = self._fallback_keys[self._key_index]
+        self.client = OpenAI(api_key=nueva_key, base_url=self.base_url)
+        logger.warning(
+            "Gemini key #%s sin cuota — rotando a key #%s de %s.",
+            self._key_index, self._key_index + 1, len(self._fallback_keys),
+        )
+        return True
 
     def process_article(self, titulo: str, cuerpo: str, seccion: str, fuente: Optional[str] = None) -> Dict:
         """
@@ -306,9 +365,15 @@ class AIProcessor:
 
     def _call_with_retry(self, user_prompt: str, max_retries: int = 3,
                          system_prompt: str | None = None) -> str:
-        """Llama a la API con backoff exponencial."""
+        """Llama a la API con backoff exponencial. Si hay varias API keys de
+        Gemini cargadas, un 429 rota a la siguiente key antes de esperar."""
         last_err: Optional[Exception] = None
         delays = [2, 4, 8]  # Backoff: 2s, 4s, 8s
+
+        if self._fallback_keys:
+            # Espacio suficiente para rotar por todas las keys y encima
+            # tener algún reintento real en la última.
+            max_retries = max(max_retries, len(self._fallback_keys) + 1)
 
         for attempt in range(max_retries):
             try:
@@ -345,6 +410,8 @@ class AIProcessor:
 
             except RateLimitError as e:
                 last_err = e
+                if self._fallback_keys and self._rotar_a_siguiente_key():
+                    continue  # key nueva ya cargada en self.client, reintenta sin esperar
                 delay = delays[min(attempt, len(delays) - 1)]
                 logger.warning(
                     "Rate limit (429) en intento %s/%s. Esperando %ss... | error=%s",

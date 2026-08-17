@@ -86,7 +86,7 @@ _STOPWORDS = frozenset({
     "el", "la", "los", "las", "de", "del", "en", "un", "una", "y", "a", "que",
     "se", "con", "por", "es", "su", "al", "lo", "le", "esta", "este", "son",
     "ha", "fue", "para", "como", "más", "no", "ya", "sin", "ante", "sobre",
-    "pero", "sus", "muy", "ser", "hasta", "hay", "entre",
+    "pero", "sus", "muy", "ser", "hasta", "hay", "entre", "tras",
     # Interrogativos/pronombres con tilde (headlines tipo "Cómo anotarse",
     # "Cuándo se juega", "Qué días estará"): no distinguen tema, y sin esto
     # "cómo" no matcheaba contra "como" (sin tilde) y colaba como palabra
@@ -97,10 +97,45 @@ _STOPWORDS = frozenset({
 })
 
 
+# Sinónimos frecuentes en la cobertura policial/local de estos medios: dos
+# portales narrando el mismo hecho con vocabulario distinto ("hallaron" vs
+# "encontraron") bajaban el puntaje de similitud por debajo del umbral aunque
+# compartieran el hecho central. Mapeamos cada variante a un token canónico
+# antes de calcular similitud — mismo mecanismo que _STOPWORDS, pero en vez
+# de filtrar la palabra, la normaliza a una forma común.
+#
+# Acotado a propósito a "hallar/arsenal/siniestro": son específicos de una
+# acción puntual (encontrar algo, un choque) y en la práctica casi siempre
+# aparecen junto con más contexto distintivo del mismo hecho (lugar, edad,
+# objeto). "detener/aprehender" y "persona/fallecido/muerto" se probaron y
+# se sacaron: son tan genéricos en la cobertura policial/local (aparecen en
+# la gran mayoría de los títulos de hechos violentos o fallecimientos, sean
+# o no el mismo hecho) que unificar sus variantes generaba falsos positivos
+# entre casos distintos sin ayudar a agrupar los reales — casos confirmados:
+# "aprehendido tras allanamiento por siete causas" se agrupó con "Quequén:
+# secuestraron armas y detuvieron a un hombre por amenazas" (operativos
+# distintos); "Tragedia en Mar del Plata... murió un hombre de 36 años" se
+# agrupó con "Encontraron muerto a un vecino de 77 años... armas" (dos
+# fallecimientos sin relación).
+_SYNONYM_MAP = {
+    "encontraron": "hallar", "hallaron": "hallar", "hallazgo": "hallar",
+    "hallan": "hallar", "halló": "hallar", "encontrado": "hallar", "hallado": "hallar",
+    "armas": "arsenal",
+    "choque": "siniestro", "colisión": "siniestro", "colision": "siniestro",
+    "chocaron": "siniestro",
+}
+
+
 def _normalize_title(title: str) -> set:
-    """Convierte un título en un conjunto de tokens normalizados."""
+    """Convierte un título en un conjunto de tokens normalizados, mapeando
+    sinónimos frecuentes (ver _SYNONYM_MAP) a una forma canónica común."""
     clean = re.sub(r"[^a-záéíóúüñ\s]", "", title.lower())
-    return {t for t in clean.split() if t not in _STOPWORDS and len(t) > 2}
+    tokens = set()
+    for t in clean.split():
+        if t in _STOPWORDS or len(t) <= 2:
+            continue
+        tokens.add(_SYNONYM_MAP.get(t, t))
+    return tokens
 
 
 def _group_by_similarity(
@@ -181,15 +216,28 @@ def _group_by_similarity(
         numbers = set(re.findall(r'\b\d+(?:[.,]\d+)?\b', title))
         words = title.split()
         capitalized = {w.lower() for w in words[1:] if w and w[0].isupper()
-                       and len(w) > 3 and w.lower() not in _STOPWORDS}
+                       and len(w) > 3 and w.lower() not in _STOPWORDS
+                       and w.lower() not in LOW_SIGNAL_WORDS}
         LUGARES = {"necochea", "quequén", "quequen", "lobería", "loberia",
                    "san cayetano", "miramar", "tres arroyos", "claromecó",
                    "ruta 88", "ruta 11", "ruta 3"}
         text_lower = title.lower()
-        lugares_found = {l for l in LUGARES if l in text_lower}
+        lugares_found = {l for l in LUGARES if l in text_lower and l not in LOW_SIGNAL_WORDS}
         return numbers | capitalized | lugares_found
 
     entities = [extract_entities(n.get("titulo", "")) for n in notes]
+
+    # Una entidad que aparece en 3+ títulos distintos del lote es genérica
+    # (nombre de un torneo recurrente, de una ley, una campaña) y no
+    # distintiva de un hecho puntual — no debe contar como "entidad
+    # compartida" en el path de zona gris (ver Hallazgo 1: "Torneo" +
+    # "Clausura" agrupaban un partido de Boca con una inscripción de fútbol
+    # infantil solo porque ambos títulos mencionaban esas dos palabras).
+    entity_doc_freq: Counter = Counter()
+    for ent_set in entities:
+        entity_doc_freq.update(ent_set)
+    GENERIC_ENTITY_THRESHOLD = 3
+    generic_entities = {e for e, c in entity_doc_freq.items() if c >= GENERIC_ENTITY_THRESHOLD}
 
     for i, note in enumerate(notes):
         if i in used:
@@ -206,7 +254,7 @@ def _group_by_similarity(
                 continue
 
             sim = weighted_overlap(sig_tokens[i], sig_tokens[j])
-            shared_entities = entities[i] & entities[j]
+            shared_entities = (entities[i] & entities[j]) - generic_entities
 
             strong_match = sim >= threshold
             gray_zone_match = sim >= gray_zone_threshold and len(shared_entities) >= 2

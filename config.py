@@ -35,9 +35,11 @@ _PROVIDER_DEFAULTS = {
         "gratis": True,
     },
     "gemini": {
-        "model": "gemini-2.0-flash",
+        # gemini-2.0-flash fue dado de baja por Google (confirmado con 404
+        # real en agosto 2026) — este es el reemplazo vigente al día de hoy.
+        "model": "gemini-2.5-flash",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "label": "Google Gemini 2.0 Flash",
+        "label": "Google Gemini 2.5 Flash",
         "gratis": True,
     },
     "openrouter": {
@@ -81,6 +83,19 @@ def _api_key_for(provider: str) -> str:
     return AI_API_KEY if provider == AI_PROVIDER else ""
 
 PROVIDER_API_KEYS: dict = {p: _api_key_for(p) for p in _PROVIDER_DEFAULTS}
+
+# Gemini soporta hasta 3 API keys gratis rotando entre sí: si una se queda
+# sin cuota (429 / RESOURCE_EXHAUSTED), AIProcessor prueba con la siguiente
+# antes de rendirse. GEMINI_API_KEY ya la toma PROVIDER_API_KEYS de arriba;
+# acá juntamos las 3 en orden para el mecanismo de fallback.
+GEMINI_API_KEYS: list = [
+    k for k in (
+        PROVIDER_API_KEYS.get("gemini", ""),
+        os.getenv("GEMINI_API_KEY_2", "").strip(),
+        os.getenv("GEMINI_API_KEY_3", "").strip(),
+    )
+    if k
+]
 
 
 def get_provider_config(provider: str) -> "dict | None":
@@ -159,8 +174,10 @@ def validate() -> bool:
         errors.append("SUPABASE_URL")
     if not SUPABASE_KEY:
         errors.append("SUPABASE_KEY")
-    if not AI_API_KEY:
-        errors.append("AI_API_KEY")
+    if not PROVIDER_API_KEYS.get(AI_PROVIDER):
+        errors.append(f"API key para el proveedor activo ({AI_PROVIDER}): seteá AI_API_KEY o {AI_PROVIDER.upper()}_API_KEY")
+    if AI_PROVIDER == "gemini" and len(GEMINI_API_KEYS) > 1:
+        logger.info("Gemini con %s API keys configuradas (rotan si una se queda sin cuota).", len(GEMINI_API_KEYS))
     if not INTERNAL_API_SECRET:
         logger.warning(
             "INTERNAL_API_SECRET no configurado: los endpoints de control "

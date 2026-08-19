@@ -101,9 +101,15 @@ SYSTEM_PROMPT = (
     "3. Tono rioplatense natural: ni coloquial ni académico.\n"
     "4. Título: describe el hecho con precisión, máx 80 caracteres, "
     "sin signos de exclamación, sin palabras huecas como 'importante' o 'clave'.\n"
-    "5. Si te indico la fuente original, podés incluir UNA mención breve y natural "
-    "en el cuerpo (ej. 'según informó {fuente}', 'de acuerdo a lo publicado por "
-    "{fuente}'), como máximo una vez. Si no te doy fuente, no la inventes.\n"
+    "5. PROHIBIDO citar, nombrar o aludir de cualquier forma al medio de donde "
+    "sale la información (ni el nombre del portal, ni frases como 'según "
+    "informó...', 'de acuerdo a lo publicado por...', 'medios locales "
+    "informaron', 'trascendió en otros medios'). La nota tiene que leerse "
+    "como reporteo propio de la redacción, sin atribuir el dato a ningún "
+    "tercero editorial. Las fuentes primarias (funcionarios, instituciones, "
+    "voceros, documentos oficiales citados en el original) sí se pueden "
+    "mencionar con normalidad — lo que no se menciona es el medio que "
+    "publicó la nota original.\n"
     "6. Priorizá datos concretos (cifras, nombres, lugares, fechas) por sobre "
     "frases genéricas de relleno ('un hecho relevante', 'la situación preocupa'). "
     "Variá la construcción de las oraciones — evitá que dos párrafos seguidos "
@@ -195,10 +201,13 @@ MULTI_SOURCE_PROMPT = (
 
     "REGLAS:\n"
     "1. Cero frases copiadas de ninguna fuente.\n"
-    "2. Si te indico las fuentes, podés atribuir de forma genérica ('medios locales "
-    "informaron', 'distintos medios de Necochea publicaron') o citar puntualmente un "
-    "medio si aporta un dato exclusivo suyo — máximo una mención en todo el cuerpo. "
-    "Si no te doy fuentes, no las inventes.\n"
+    "2. PROHIBIDO citar, nombrar o aludir de cualquier forma a los medios de donde "
+    "salen las versiones (ni sus nombres, ni frases genéricas tipo 'medios locales "
+    "informaron', 'distintos medios de Necochea publicaron', 'trascendió en otros "
+    "medios'). La nota tiene que leerse como reporteo propio de la redacción. Las "
+    "fuentes primarias (funcionarios, instituciones, voceros) sí se pueden "
+    "mencionar con normalidad — lo que no se menciona es el medio editorial que "
+    "publicó cada versión.\n"
     "3. Voz activa, tono rioplatense, rigor periodístico.\n"
     "4. Priorizá datos concretos por sobre relleno genérico. Variá la sintaxis "
     "entre párrafos — no repitas la misma estructura de oración dos veces seguidas. "
@@ -302,8 +311,7 @@ class AIProcessor:
         user_prompt = (
             f"Sección: {seccion}\n"
             f"Título original: {titulo}\n"
-            + (f"Fuente original (para atribución opcional, no la copies textualmente): {fuente}\n" if fuente else "")
-            + f"Cuerpo original:\n{cuerpo}\n"
+            f"Cuerpo original:\n{cuerpo}\n"
         )
 
         text = self._call_with_retry(user_prompt)
@@ -337,13 +345,11 @@ class AIProcessor:
         sources_block = "\n\n--- VERSIÓN SIGUIENTE ---\n\n".join(
             f"[Versión {i+1}]:\n{t}" for i, t in enumerate(textos)
         )
-        fuentes_unicas = sorted({f for f in (fuentes or []) if f})
         user_prompt = (
             f"Sección: {seccion}\n"
             f"Título referencial: {titulo}\n"
             f"Cantidad de fuentes: {len(textos)}\n"
-            + (f"Medios de origen (para atribución opcional, no los copies textualmente): {', '.join(fuentes_unicas)}\n" if fuentes_unicas else "")
-            + f"\nA continuación las {len(textos)} versiones del mismo hecho:\n\n"
+            f"\nA continuación las {len(textos)} versiones del mismo hecho:\n\n"
             f"{sources_block}\n"
         )
 

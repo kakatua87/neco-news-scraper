@@ -61,11 +61,23 @@ def _elegir_proxy() -> Optional[dict]:
     }
 
 
+# Solo necesitamos el HTML/texto de la nota — imágenes, fuentes, CSS y media
+# son la mayor parte del peso de una página de diario (fotos, ads, banners,
+# video embebido) y no aportan nada al scraping. Bloquearlos recorta
+# drásticamente el ancho de banda consumido por Playwright sin afectar la
+# extracción (que lee el DOM/HTML, no el render visual).
+_RECURSOS_BLOQUEADOS = {"image", "media", "font", "stylesheet"}
+
+
 def _nuevo_contexto(browser: Browser, proxy: Optional[dict] = None):
     """Contexto con la huella de Chrome real y sin la señal más obvia de
     automatización (navigator.webdriver=true por defecto en Playwright)."""
     context = browser.new_context(proxy=proxy, **BROWSER_CONTEXT_KWARGS)
     context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+    context.route(
+        "**/*",
+        lambda route: route.abort() if route.request.resource_type in _RECURSOS_BLOQUEADOS else route.continue_(),
+    )
     return context
 
 

@@ -1,0 +1,11 @@
+.env
+.env.*
+.git/
+.gitignore
+venv/
+__pycache__/
+*.pyc
+.playwright/
+fly.toml
+MIGRACION_FLY.md
+README.md

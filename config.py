@@ -136,7 +136,7 @@ TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 PORT: int = int(os.getenv("PORT", "8000"))
 MAX_NOTES_PER_RUN: int = int(os.getenv("MAX_NOTES_PER_RUN", "12"))
 AI_DELAY_SECONDS: float = float(os.getenv("AI_DELAY_SECONDS", "2.0"))
-SCHEDULER_INTERVAL_MINUTES: int = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "15"))
+SCHEDULER_INTERVAL_MINUTES: int = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "30"))
 
 # ─── Portal URL (para links en Telegram) ─────────────────────────
 PORTAL_URL: str = os.getenv("PORTAL_URL", "https://neco-news.vercel.app").strip()

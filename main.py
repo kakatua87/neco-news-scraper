@@ -666,12 +666,30 @@ def on_startup() -> None:
         except Exception as e:
             logger.error("Error en update_services_job: %s", e)
 
+    # misfire_grace_time: si el proceso arrancó tarde (deploy, reinicio de Fly,
+    # OOM) APScheduler igual dispara la corrida de las 07:00 mientras no hayan
+    # pasado más de 6 h. Sin esto, el grace por defecto es 1 s y la ejecución
+    # se descarta en silencio: ese día obituarios y farmacias no se actualizan.
+    # coalesce: si se acumuló más de una corrida pendiente (estuvo caído >1 día)
+    # se ejecuta una sola vez al volver, no N veces seguidas.
     scheduler.add_job(
         update_services_job,
         trigger="cron",
         hour=7,
         minute=0,
         id="services_pipeline",
+        replace_existing=True,
+        misfire_grace_time=6 * 3600,
+        coalesce=True,
+    )
+
+    # Red de seguridad: además de la ventana de las 07:00, correr servicios una
+    # vez apenas arranca el contenedor. Cualquier reinicio recupera el estado
+    # sin esperar al día siguiente. update_services() es idempotente (upsert por
+    # slug), así que reescribe las mismas filas con datos frescos, no duplica.
+    scheduler.add_job(
+        update_services_job,
+        id="services_startup",
         replace_existing=True,
     )
 
@@ -696,7 +714,7 @@ def on_startup() -> None:
 
     scheduler.start()
     logger.info(
-        "Scheduler iniciado | scraping cada %s min | servicios diario 07:00",
+        "Scheduler iniciado | scraping cada %s min | servicios 07:00 + al arrancar",
         config.SCHEDULER_INTERVAL_MINUTES,
     )
 

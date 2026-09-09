@@ -13,6 +13,7 @@ API: FastAPI con /health, /telegram/callback, /procesar-grupo, /run, /run-servic
 import argparse
 import logging
 import math
+import os
 import random
 import re
 import sys
@@ -689,6 +690,17 @@ async def manual_limpieza() -> Dict:
 
 @app.on_event("startup")
 def on_startup() -> None:
+    # El scheduling de producción vive en GitHub Actions (workflows scrape.yml /
+    # services.yml). El APScheduler in-process solo tiene sentido en un host
+    # 24/7 real (Fly, Render pago); en Render Free el proceso se duerme a los
+    # 15 min y estos jobs no disparan igual. Se activa con ENABLE_INPROCESS_SCHEDULER=true.
+    if os.getenv("ENABLE_INPROCESS_SCHEDULER", "false").strip().lower() != "true":
+        logger.info(
+            "APScheduler in-process desactivado (ENABLE_INPROCESS_SCHEDULER != true). "
+            "El scheduling corre en GitHub Actions."
+        )
+        return
+
     # Fase 1: scraping sin IA, cada N minutos. jitter agrega hasta +/-3 min de
     # variación aleatoria a cada disparo, para no golpear las fuentes siempre
     # al segundo exacto (patrón de cron perfecto = fácil de detectar como bot).
@@ -763,8 +775,9 @@ def on_startup() -> None:
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
-    scheduler.shutdown(wait=False)
-    logger.info("Scheduler detenido.")
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+        logger.info("Scheduler detenido.")
 
 
 # ─── CLI ─────────────────────────────────────────────────────────
@@ -772,10 +785,14 @@ def on_shutdown() -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Neco News Scraper v3")
     parser.add_argument("--scrape", action="store_true", help="Ejecuta pipeline_scraping() y termina.")
+    parser.add_argument("--services", action="store_true", help="Ejecuta ServicesScraper().update_services() y termina.")
     parser.add_argument("--smoke", action="store_true", help="Test de conectividad con IA y termina.")
     args = parser.parse_args()
 
-    if not config.validate():
+    # --scrape y --services no tocan la IA: no exigir la API key del proveedor
+    # (así el job de GitHub Actions no necesita cargar esos secrets).
+    require_ai = not (args.scrape or args.services)
+    if not config.validate(require_ai=require_ai):
         sys.exit(1)
 
     if args.smoke:
@@ -789,6 +806,10 @@ if __name__ == "__main__":
 
     if args.scrape:
         pipeline_scraping()
+        sys.exit(0)
+
+    if args.services:
+        ServicesScraper().update_services()
         sys.exit(0)
 
     uvicorn.run("main:app", host="0.0.0.0", port=config.PORT, reload=False)

@@ -1,0 +1,42 @@
+name: Servicios y limpieza
+
+# Diario: actualiza farmacias de turno + obituarios (ServicesScraper, sin IA ni
+# navegador) y expira notas viejas. Reemplaza a los jobs services_pipeline /
+# services_startup / limpieza_pipeline del APScheduler in-process.
+
+on:
+  schedule:
+    - cron: "0 10 * * *"   # ~07:00 ART
+  workflow_dispatch:
+
+concurrency:
+  group: services-diario
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Servicios (farmacias + obituarios)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python main.py --services
+
+      - name: Limpieza (expira notas >15 dias y pendientes huerfanas)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python -c "from supabase_client import SupabaseNewsClient as C; c=C(); c.descartar_pendientes_sin_grupo(); c.expirar_noticias_antiguas(dias=15)"

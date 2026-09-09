@@ -48,11 +48,18 @@ def _pausa_humana(min_s: float = 0.8, max_s: float = 2.5) -> None:
     time.sleep(random.uniform(min_s, max_s))
 
 
-def _elegir_proxy() -> Optional[dict]:
+def _elegir_proxy(url: str = "") -> Optional[dict]:
     """Elige un proxy al azar del pool configurado (Webshare free u otro).
-    None si el proxy está desactivado o falta configuración."""
+
+    None si el proxy está desactivado, falta configuración, o el dominio de `url`
+    no está en config.PROXY_ONLY_DOMAINS (reservamos la banda del pool free para
+    las fuentes que la necesitan de verdad — las que están tras un WAF)."""
     if not (config.PROXY_ENABLED and config.PROXY_LIST and config.PROXY_USERNAME and config.PROXY_PASSWORD):
         return None
+    if config.PROXY_ONLY_DOMAINS:
+        dominio = urlparse(url).netloc.lower().removeprefix("www.")
+        if dominio not in config.PROXY_ONLY_DOMAINS:
+            return None
     host_puerto = random.choice(config.PROXY_LIST)
     return {
         "server": f"http://{host_puerto}",
@@ -92,7 +99,7 @@ def _abrir_pagina(browser: Browser, url: str, timeout: int = 30000, forzar_direc
     _scrape_homepage: los proxies free a veces "conectan bien" pero
     devuelven una página de challenge/vacía en vez del sitio real).
     """
-    proxy = None if forzar_directo else _elegir_proxy()
+    proxy = None if forzar_directo else _elegir_proxy(url)
     context = _nuevo_contexto(browser, proxy=proxy)
     page = context.new_page()
     try:

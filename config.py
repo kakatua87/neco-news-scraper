@@ -154,27 +154,42 @@ SCRAPER_URL: str = os.getenv("SCRAPER_URL", "http://localhost:8000").strip()
 INTERNAL_API_SECRET: str = os.getenv("INTERNAL_API_SECRET", "").strip()
 
 # ─── Proxy rotativo (Webshare u otro compatible) ──────────────────
-# PROXY_LIST: "host:puerto,host:puerto,..." — una IP se elige al azar por
-# request. Mismo usuario/clave para todas (plan free de Webshare). Si falla
-# un proxy (banda agotada, timeout, auth) el scraper cae a conexión directa
-# en vez de romper el pipeline — ver scraper.py:_abrir_pagina.
+# PROXY_LIST: "host:puerto,host:puerto,..." (SIN esquema — el código antepone
+# http://). Una IP se elige al azar por request. Mismo usuario/clave para
+# todas (plan free de Webshare). Si falla un proxy (banda agotada, timeout,
+# auth) el scraper cae a conexión directa en vez de romper el pipeline —
+# ver scraper.py:_abrir_pagina.
 PROXY_ENABLED: bool = os.getenv("PROXY_ENABLED", "false").strip().lower() == "true"
 PROXY_LIST: list = [p.strip() for p in os.getenv("PROXY_LIST", "").split(",") if p.strip()]
 PROXY_USERNAME: str = os.getenv("PROXY_USERNAME", "").strip()
 PROXY_PASSWORD: str = os.getenv("PROXY_PASSWORD", "").strip()
 
+# Dominios que SÍ salen por proxy (el resto va directo, aunque PROXY_ENABLED
+# esté en true). El plan free de Webshare tiene 1 GB/mes: reservamos esa banda
+# para las fuentes que realmente la necesitan (las que están detrás de un WAF
+# y bloquean el scraping desde IP de datacenter). Set vacío = proxy para todo.
+PROXY_ONLY_DOMAINS: set = {
+    d.strip().lower().removeprefix("www.")
+    for d in os.getenv("PROXY_ONLY_DOMAINS", "diarionecochea.com,diario4v.com").split(",")
+    if d.strip()
+}
+
 # ─── Branding ─────────────────────────────────────────────────────
 PORTAL_NAME: str = "Neco Now"
 
 
-def validate() -> bool:
-    """Valida que las variables críticas estén definidas. Retorna False si falta alguna."""
+def validate(require_ai: bool = True) -> bool:
+    """Valida que las variables críticas estén definidas. Retorna False si falta alguna.
+
+    require_ai=False para corridas que no tocan la IA (--scrape / --services): así
+    el job de scraping en GitHub Actions no necesita cargar la API key del proveedor.
+    """
     errors = []
     if not SUPABASE_URL:
         errors.append("SUPABASE_URL")
     if not SUPABASE_KEY:
         errors.append("SUPABASE_KEY")
-    if not PROVIDER_API_KEYS.get(AI_PROVIDER):
+    if require_ai and not PROVIDER_API_KEYS.get(AI_PROVIDER):
         errors.append(f"API key para el proveedor activo ({AI_PROVIDER}): seteá AI_API_KEY o {AI_PROVIDER.upper()}_API_KEY")
     if AI_PROVIDER == "gemini" and len(GEMINI_API_KEYS) > 1:
         logger.info("Gemini con %s API keys configuradas (rotan si una se queda sin cuota).", len(GEMINI_API_KEYS))

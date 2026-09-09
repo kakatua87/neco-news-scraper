@@ -1,0 +1,47 @@
+name: Scrape noticias (Fase 1)
+
+# Fase 1 del pipeline: scrape -> dedup -> Supabase (estado=raw) -> push al portal.
+# No usa IA ni Telegram. Corre en Actions porque en Render Free el proceso se
+# duerme a los 15 min y el APScheduler in-process deja de disparar.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # cada 30 min UTC (best-effort: puede demorarse o saltear en horas pico)
+  workflow_dispatch:
+
+concurrency:
+  group: scrape-fase1
+  cancel-in-progress: false   # no matar una corrida en curso
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Instalar Chromium (Playwright)
+        run: python -m playwright install --with-deps chromium
+
+      - name: pipeline_scraping
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          PORTAL_URL: ${{ secrets.PORTAL_URL }}
+          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
+          MAX_NOTES_PER_RUN: "12"
+          # Proxy Webshare: el codigo (config.PROXY_ONLY_DOMAINS) lo usa solo para
+          # diarionecochea.com y diario4v.com; las otras 4 fuentes salen directo.
+          PROXY_ENABLED: ${{ secrets.PROXY_ENABLED }}
+          PROXY_LIST: ${{ secrets.PROXY_LIST }}
+          PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
+          PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
+        run: python main.py --scrape

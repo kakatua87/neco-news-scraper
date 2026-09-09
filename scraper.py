@@ -455,12 +455,19 @@ class NewsScraper:
                     seccion = section_el.get_text(" ", strip=True) if section_el else "General"
                     seccion = self._normalize_section(seccion)
 
+                    # Resumen/bajada de la card. No es el cuerpo completo, pero
+                    # sirve de fallback en pipeline_scraping cuando la nota
+                    # individual devuelve un 403 / página de challenge y sin esto
+                    # la nota se perdería por completo.
+                    resumen = self._extract_card_summary(card, titulo)
+
                     items.append({
                         "titulo": titulo,
                         "url": url,
                         "imagen_url": imagen_url,
                         "seccion": seccion or "General",
                         "fuente": fuente,
+                        "resumen": resumen,
                     })
                     seen.add(url)
 
@@ -521,6 +528,32 @@ class NewsScraper:
                     return titulo, url
 
         return "", ""
+
+    # Selectores de bajada/resumen dentro de una card de homepage, del más
+    # específico (temas WordPress/Newspaper habituales en los diarios locales)
+    # al más genérico.
+    _CARD_SUMMARY_SELECTORS = (
+        ".td-excerpt, .entry-summary, .jeg_post_excerpt, .post-excerpt, "
+        ".entry-content p, .bajada, .excerpt, .summary, .description, p"
+    )
+
+    @classmethod
+    def _extract_card_summary(cls, card: BeautifulSoup, titulo: str) -> str:
+        """
+        Bajada/resumen de la card, para usar de fallback si la nota individual
+        no se puede scrapear (403/challenge). Devuelve "" si no encuentra un
+        texto razonable (>= 60 chars y que no sea sólo el título repetido).
+        """
+        titulo_norm = re.sub(r"\s+", " ", (titulo or "").strip().lower())
+        for sel in cls._CARD_SUMMARY_SELECTORS.split(", "):
+            for el in card.select(sel.strip()):
+                txt = re.sub(r"\s+", " ", el.get_text(" ", strip=True))
+                if len(txt) < 60:
+                    continue
+                if txt.strip().lower() == titulo_norm:
+                    continue
+                return txt[:1200]
+        return ""
 
     @staticmethod
     def _extract_image(card: BeautifulSoup, image_selector: str, base_url: str) -> Optional[str]:

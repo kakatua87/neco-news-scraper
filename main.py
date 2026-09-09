@@ -64,6 +64,25 @@ def slug_from_url(url: str, fallback_title: str) -> str:
     return base or "nota"
 
 
+# Textos típicos de páginas de bloqueo/anti-bot (Cloudflare, WAF, 403 duro).
+# Cuando get_article_content devuelve algo así en vez del artículo real, la
+# nota se completa con el resumen scrapeado del homepage (ver pipeline_scraping).
+_MARCADORES_BLOQUEO = (
+    "403 forbidden", "403 - forbidden", "error 403", "access denied",
+    "just a moment", "attention required", "verifying you are human",
+    "enable javascript and cookies", "checking your browser",
+    "request unsuccessful", "ddos protection by",
+)
+
+
+def _es_pagina_bloqueo(texto: str) -> bool:
+    """True si el texto parece una página de challenge/bloqueo y no un artículo."""
+    t = (texto or "").strip().lower()
+    if len(t) > 600:  # un artículo real que casualmente menciona "error 403" no cuenta
+        return False
+    return any(marcador in t for marcador in _MARCADORES_BLOQUEO)
+
+
 def notify_nuevo_grupo(cantidad_notas: int, seccion: str) -> None:
     """Avisa al portal (push OneSignal) que hay un grupo nuevo para revisar en /admin."""
     try:
@@ -365,17 +384,40 @@ def pipeline_scraping() -> None:
             if not note_url or note_url in existing_urls:
                 continue
             try:
-                article_data = scraper.get_article_content(note_url)
-                texto = article_data.get("text", "")
-                if len(texto) < 60:
-                    logger.debug("Contenido insuficiente para %s, omitiendo.", note_url)
-                    continue
+                try:
+                    article_data = scraper.get_article_content(note_url)
+                    texto = article_data.get("text", "") or ""
+                    imagen_art = (
+                        article_data.get("og_image")
+                        or article_data.get("content_image")
+                    )
+                except Exception:
+                    logger.warning(
+                        "get_article_content falló para %s; se intenta el resumen del listado.",
+                        note_url,
+                    )
+                    texto, imagen_art = "", None
 
-                imagen = (
-                    article_data.get("og_image")
-                    or article_data.get("content_image")
-                    or note.get("imagen_url")
-                )
+                # Fallback: si la nota individual devolvió un 403 / página de
+                # challenge (o texto vacío), usar la bajada scrapeada del
+                # homepage en vez de perder la nota. Queda como 'raw' con el
+                # cuerpo corto; el editor la completa en /admin.
+                if len(texto) < 60 or _es_pagina_bloqueo(texto):
+                    resumen_card = (note.get("resumen") or "").strip()
+                    if len(resumen_card) >= 60:
+                        logger.warning(
+                            "Nota %s sin cuerpo scrapeable (bloqueo/403); fallback al resumen del listado.",
+                            note_url,
+                        )
+                        texto = resumen_card
+                    else:
+                        logger.debug(
+                            "Contenido insuficiente para %s y sin resumen de fallback, omitiendo.",
+                            note_url,
+                        )
+                        continue
+
+                imagen = imagen_art or note.get("imagen_url")
                 titulo_original = note.get("titulo", "")
 
                 datos_raw = {

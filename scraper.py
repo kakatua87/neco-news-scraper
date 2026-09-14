@@ -416,6 +416,8 @@ class NewsScraper:
     ) -> List[Dict]:
         items: List[Dict] = []
         seen: Set[str] = set()
+        cards: List = []
+        items_descartados_dedup = 0
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             try:
@@ -440,6 +442,17 @@ class NewsScraper:
                     soup = BeautifulSoup(html, "html.parser")
                     cards = soup.select(card_selector)
 
+                if not cards:
+                    # Diagnostico: sin esto, "0 notas nuevas" no dice si el sitio
+                    # esta devolviendo una pagina de challenge/bloqueo, un layout
+                    # distinto al esperado, o genuinamente no cambio nada.
+                    page_title = soup.title.get_text(strip=True) if soup.title else "(sin titulo)"
+                    body_text = soup.get_text(" ", strip=True)[:300] if soup.body else "(sin body)"
+                    logger.warning(
+                        "0 cards con selector '%s' en %s | title=%r | snippet=%r",
+                        card_selector, base_url, page_title, body_text,
+                    )
+
                 for card in cards:
                     # Extraer título y link con múltiples selectores
                     titulo, url = self._extract_title_and_url(
@@ -452,6 +465,7 @@ class NewsScraper:
                     if self._is_non_article_url(url):
                         continue
                     if url in self.existing_urls or url in seen:
+                        items_descartados_dedup += 1
                         continue
 
                     # Imagen
@@ -483,6 +497,14 @@ class NewsScraper:
             finally:
                 browser.close()
 
+        if cards and not items and items_descartados_dedup == len(cards):
+            # Las cards se encontraron bien (selector OK) pero todas ya
+            # existian en la base -- no es un problema de scraping, el sitio
+            # simplemente no publico nada nuevo desde el ultimo ciclo.
+            logger.info(
+                "%s cards en %s, todas ya existentes (sin notas nuevas realmente).",
+                len(cards), base_url,
+            )
         logger.info("Encontradas %s notas nuevas en %s", len(items), base_url)
         return items
 

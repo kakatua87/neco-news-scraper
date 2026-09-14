@@ -29,9 +29,12 @@ AI_BASE_URL: str = os.getenv("AI_BASE_URL", "").strip()
 # selector del panel admin (GET /ai-providers).
 _PROVIDER_DEFAULTS = {
     "groq": {
-        "model": "llama-3.3-70b-versatile",
+        # llama-3.3-70b-versatile fue dado de baja por Groq (confirmado con
+        # 404 real vs /v1/models en septiembre 2026) -- este es el modelo
+        # grande vigente al dia de hoy.
+        "model": "openai/gpt-oss-120b",
         "base_url": "https://api.groq.com/openai/v1",
-        "label": "Groq (Llama 3.3 70B)",
+        "label": "Groq (GPT-OSS 120B)",
         "gratis": True,
     },
     "gemini": {

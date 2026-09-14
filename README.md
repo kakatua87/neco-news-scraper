@@ -10,7 +10,7 @@ push al portal. Corre en **GitHub Actions** (`.github/workflows/scrape.yml`, cro
 
 **Fase 2 — reescritura con IA (on-demand).** Desde `/admin` del portal se dispara
 `POST /procesar-grupo` contra este servicio: lee las notas `raw` del grupo, la IA
-(Groq/Gemini/OpenAI/Claude) sintetiza una nota y la deja en `estado=pendiente` para revisión.
+(Gemini/OpenAI/Claude) sintetiza una nota y la deja en `estado=pendiente` para revisión.
 Vive en un **web service de Render** (puede estar en Free: se despierta con el request del panel).
 
 **Servicios + limpieza (sin IA).** Farmacias de turno, obituarios y expiración de notas
@@ -34,7 +34,7 @@ pip install -r requirements.txt
 python -m playwright install chromium
 
 # .env con al menos SUPABASE_URL, SUPABASE_KEY (+ PORTAL_URL, INTERNAL_API_SECRET
-# para el push; + AI_API_KEY / GROQ_API_KEY solo si vas a probar la Fase 2)
+# para el push; + AI_API_KEY / GEMINI_API_KEY solo si vas a probar la Fase 2)
 
 python main.py --scrape      # corre Fase 1 una vez y termina (no requiere IA)
 python main.py --services     # corre servicios (farmacias/obituarios) y termina
@@ -74,9 +74,7 @@ Notas:
 
 | Proveedor | Variable |
 |---|---|
-| **Groq** (default, gratis) | `AI_PROVIDER=groq` |
-| Google Gemini (gratis, rota hasta 3 keys) | `AI_PROVIDER=gemini` |
-| OpenRouter | `AI_PROVIDER=openrouter` |
+| **Google Gemini** (default, gratis, rota hasta 3 keys) | `AI_PROVIDER=gemini` |
 | OpenAI | `AI_PROVIDER=openai` |
 | Claude | `AI_PROVIDER=anthropic` |
 

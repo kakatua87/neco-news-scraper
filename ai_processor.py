@@ -1,13 +1,13 @@
 """
 Motor IA multi-proveedor para reescritura de noticias.
 
-Usa la librería `openai` de Python que es compatible con Groq, OpenAI y otros
-proveedores que exponen una API compatible con el formato OpenAI.
+Usa la librería `openai` de Python, compatible con el formato de API de
+OpenAI que también exponen Gemini y otros proveedores.
 
 Proveedores soportados:
-  - groq   (gratis, Llama 3.3 70B)   ← default
-  - openai (GPT-4o-mini, requiere pago)
-  - anthropic (Claude, futuro)
+  - gemini    (gratis, Gemini 2.5 Flash)   ← default
+  - openai    (GPT-4o-mini, requiere pago)
+  - anthropic (Claude Sonnet, requiere pago)
 """
 
 import json

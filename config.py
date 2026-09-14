@@ -20,7 +20,7 @@ SUPABASE_URL: str = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "").strip()
 
 # ─── IA Multi-proveedor ─────────────────────────────────────────
-AI_PROVIDER: str = os.getenv("AI_PROVIDER", "groq").strip().lower()
+AI_PROVIDER: str = os.getenv("AI_PROVIDER", "gemini").strip().lower()
 AI_API_KEY: str = os.getenv("AI_API_KEY", "").strip()
 AI_MODEL: str = os.getenv("AI_MODEL", "").strip()
 AI_BASE_URL: str = os.getenv("AI_BASE_URL", "").strip()
@@ -28,27 +28,12 @@ AI_BASE_URL: str = os.getenv("AI_BASE_URL", "").strip()
 # Defaults por proveedor. "label" y "gratis" son solo para mostrar en el
 # selector del panel admin (GET /ai-providers).
 _PROVIDER_DEFAULTS = {
-    "groq": {
-        # llama-3.3-70b-versatile fue dado de baja por Groq (confirmado con
-        # 404 real vs /v1/models en septiembre 2026) -- este es el modelo
-        # grande vigente al dia de hoy.
-        "model": "openai/gpt-oss-120b",
-        "base_url": "https://api.groq.com/openai/v1",
-        "label": "Groq (GPT-OSS 120B)",
-        "gratis": True,
-    },
     "gemini": {
         # gemini-2.0-flash fue dado de baja por Google (confirmado con 404
         # real en agosto 2026) — este es el reemplazo vigente al día de hoy.
         "model": "gemini-2.5-flash",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "label": "Google Gemini 2.5 Flash",
-        "gratis": True,
-    },
-    "openrouter": {
-        "model": "meta-llama/llama-3.3-70b-instruct:free",
-        "base_url": "https://openrouter.ai/api/v1",
-        "label": "OpenRouter (Llama 3.3 70B free)",
         "gratis": True,
     },
     "openai": {

@@ -418,6 +418,9 @@ class NewsScraper:
         seen: Set[str] = set()
         cards: List = []
         items_descartados_dedup = 0
+        items_descartados_sin_titulo_o_url = 0
+        items_descartados_titulo_corto = 0
+        items_descartados_no_articulo = 0
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             try:
@@ -459,10 +462,13 @@ class NewsScraper:
                         card, title_selector, link_selector, base_url
                     )
                     if not titulo or not url:
+                        items_descartados_sin_titulo_o_url += 1
                         continue
                     if len(titulo) < 8:
+                        items_descartados_titulo_corto += 1
                         continue
                     if self._is_non_article_url(url):
+                        items_descartados_no_articulo += 1
                         continue
                     if url in self.existing_urls or url in seen:
                         items_descartados_dedup += 1
@@ -497,14 +503,29 @@ class NewsScraper:
             finally:
                 browser.close()
 
-        if cards and not items and items_descartados_dedup == len(cards):
-            # Las cards se encontraron bien (selector OK) pero todas ya
-            # existian en la base -- no es un problema de scraping, el sitio
-            # simplemente no publico nada nuevo desde el ultimo ciclo.
-            logger.info(
-                "%s cards en %s, todas ya existentes (sin notas nuevas realmente).",
-                len(cards), base_url,
-            )
+        if cards and not items:
+            if items_descartados_dedup == len(cards):
+                # Las cards se encontraron bien (selector OK) pero todas ya
+                # existian en la base -- no es un problema de scraping, el
+                # sitio simplemente no publico nada nuevo desde el ultimo ciclo.
+                logger.info(
+                    "%s cards en %s, todas ya existentes (sin notas nuevas realmente).",
+                    len(cards), base_url,
+                )
+            else:
+                # Hay cards (el selector matchea) pero ninguna se convirtio en
+                # nota, y no es por deduplicacion -- algo en la extraccion de
+                # titulo/url o en el filtro de "no es articulo" esta fallando
+                # para todas. Este desglose dice exactamente cual.
+                logger.warning(
+                    "%s cards en %s pero 0 notas nuevas | sin_titulo_o_url=%s "
+                    "titulo_corto=%s no_articulo=%s ya_existian=%s",
+                    len(cards), base_url,
+                    items_descartados_sin_titulo_o_url,
+                    items_descartados_titulo_corto,
+                    items_descartados_no_articulo,
+                    items_descartados_dedup,
+                )
         logger.info("Encontradas %s notas nuevas en %s", len(items), base_url)
         return items
 

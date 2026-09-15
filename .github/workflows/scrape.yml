@@ -37,7 +37,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           PORTAL_URL: ${{ secrets.PORTAL_URL }}
           INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
-          MAX_NOTES_PER_RUN: "12"
+          MAX_NOTES_PER_RUN: "60"
           # Proxy Webshare: el codigo (config.PROXY_ONLY_DOMAINS) lo usa solo para
           # diarionecochea.com y diario4v.com; las otras 4 fuentes salen directo.
           PROXY_ENABLED: ${{ secrets.PROXY_ENABLED }}

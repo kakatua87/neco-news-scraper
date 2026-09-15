@@ -122,6 +122,8 @@ TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 # ─── Pipeline ────────────────────────────────────────────────────
 PORT: int = int(os.getenv("PORT", "8000"))
+# Tope de grupos a procesar POR FUENTE en cada corrida (no global) -- ver
+# main.py:pipeline_scraping, seccion "Cupo por sitio".
 MAX_NOTES_PER_RUN: int = int(os.getenv("MAX_NOTES_PER_RUN", "12"))
 AI_DELAY_SECONDS: float = float(os.getenv("AI_DELAY_SECONDS", "2.0"))
 SCHEDULER_INTERVAL_MINUTES: int = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "30"))

@@ -366,9 +366,30 @@ def pipeline_scraping() -> None:
     groups = _group_by_similarity(raw_notes)
     logger.info("Grupos tras dedup: %s (de %s notas)", len(groups), len(raw_notes))
 
+    # ── Cupo por sitio ────────────────────────────────────────────
+    # MAX_NOTES_PER_RUN es un tope POR FUENTE (no global): antes, un sitio
+    # con mucho volumen en el tope de la lista (ej. NDEN, Diario4V) se comia
+    # el cupo entero de la corrida y dejaba a los demas (El Ecos, TSN,
+    # DiarioNQ, Neco24) sin procesar ninguna nota nueva aunque tuvieran
+    # varias esperando. Agrupando por la fuente del lider de cada grupo antes
+    # de cortar, cada sitio con novedades se lleva su propio cupo.
+    grupos_por_fuente: Dict[str, List] = {}
+    for group in groups:
+        fuente_lider = group[0].get("fuente", "")
+        grupos_por_fuente.setdefault(fuente_lider, []).append(group)
+
+    grupos_a_procesar: List = []
+    for fuente_lider, grupos_fuente in grupos_por_fuente.items():
+        grupos_a_procesar.extend(grupos_fuente[: config.MAX_NOTES_PER_RUN])
+
+    logger.info(
+        "Grupos a procesar esta corrida: %s de %s totales (cupo=%s por fuente, %s fuentes con novedades)",
+        len(grupos_a_procesar), len(groups), config.MAX_NOTES_PER_RUN, len(grupos_por_fuente),
+    )
+
     # ── Procesar cada grupo ──────────────────────────────────────
     saved = 0
-    for group in groups[:config.MAX_NOTES_PER_RUN]:
+    for group in grupos_a_procesar:
         leader = group[0]
         urls = [n["url"] for n in group if n.get("url")]
 

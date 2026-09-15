@@ -24,19 +24,39 @@ class SupabaseNewsClient:
         self.client: Client = create_client(url, key)
 
     def get_urls_existentes(self) -> Set[str]:
-        """Obtiene todas las URLs ya procesadas para evitar duplicados."""
+        """Obtiene todas las URLs ya procesadas para evitar duplicados.
+
+        Pagina con .range() porque PostgREST limita cada select a 1000 filas
+        por defecto (db-max-rows) -- sin esto, una vez que "noticias" supera
+        las 1000 filas, este set queda incompleto y el scraper vuelve a
+        intentar guardar notas viejas que ya existen, lo que revienta con
+        "duplicate key value violates unique constraint noticias_url_original_key".
+        """
+        urls: Set[str] = set()
+        page_size = 1000
+        offset = 0
         try:
-            response = (
-                self.client.table("noticias")
-                .select("url_original")
-                .not_.is_("url_original", "null")
-                .execute()
-            )
-            data: List[Dict] = response.data or []
-            return {str(row["url_original"]).strip() for row in data if row.get("url_original")}
+            while True:
+                response = (
+                    self.client.table("noticias")
+                    .select("url_original")
+                    .not_.is_("url_original", "null")
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                data: List[Dict] = response.data or []
+                urls.update(
+                    str(row["url_original"]).strip()
+                    for row in data
+                    if row.get("url_original")
+                )
+                if len(data) < page_size:
+                    break
+                offset += page_size
+            return urls
         except Exception:
             logger.exception("Error al obtener URLs existentes en Supabase.")
-            return set()
+            return urls
 
     def insert_noticia(self, datos: Dict) -> Dict:
         """Inserta una noticia nueva con estado 'pendiente'."""

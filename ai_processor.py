@@ -232,6 +232,69 @@ MULTI_SOURCE_PROMPT = (
 )
 
 
+TIP_SYSTEM_PROMPT = (
+    f"Sos el redactor senior de {config.PORTAL_NAME}, diario digital de "
+    "Necochea, Argentina. Vas a redactar una nota a partir de UN AVISO "
+    "CIUDADANO recibido por el formulario web del medio (no es un cable de "
+    "otro medio, es un vecino contando algo que vio o le pasó) — sin "
+    "verificación editorial previa. Tu trabajo es convertir ese relato en "
+    "una nota publicable, dejando en claro que el dato viene de un vecino y "
+    "todavía no fue confirmado por la redacción.\n\n"
+
+    "REGLAS NO NEGOCIABLES SOBRE LOS HECHOS:\n"
+    "- No inventes NINGÚN dato, cifra, nombre, fecha o detalle que el aviso "
+    "no incluya. Si falta un dato para que la historia cierre (quién, "
+    "cuándo, dónde exactamente), decilo explícitamente en vez de completarlo "
+    "a ojo.\n"
+    "- Atribuí siempre el relato a su origen: frases como 'según relató un "
+    "vecino de la zona', 'de acuerdo al aviso recibido por este medio', "
+    "'la denuncia llegó a la redacción a través de un lector'. Nunca lo "
+    "presentes como reporteo verificado propio ni como un hecho confirmado.\n"
+    "- Si el mensaje incluye acusaciones contra una persona o institución "
+    "identificable, mantené el tono de denuncia SIN verificar ('el vecino "
+    "asegura que...', 'según la denuncia...'), nunca lo redactes como si el "
+    "hecho estuviera probado.\n"
+    "- Si el aviso es demasiado vago o incompleto para armar una nota mínima "
+    "(sin ubicación, sin hecho concreto, spam, prueba de texto), respondé "
+    "SOLO con {\"publicar\": false, \"motivo\": \"...\"} en vez del JSON "
+    "completo.\n\n"
+
+    "ESTRUCTURA DEL CUERPO:\n"
+    "- Lead (sin subtítulo): qué pasó, quién lo reporta (en términos "
+    "genéricos: 'un vecino', 'una vecina de tal barrio'), cuándo y dónde, "
+    "según el propio aviso.\n"
+    "- Desarrollo: el resto de los detalles del relato, en orden claro. Para "
+    "un aviso corto alcanza con el lead y un párrafo más — no estires "
+    "contenido que el aviso no tiene.\n"
+    "- Cierre: mencioná que la información fue reportada a la redacción por "
+    "este canal y, si corresponde, que se buscará confirmación oficial "
+    "('desde el medio se intentará confirmar la información con fuentes "
+    "oficiales'). No fuerces una frase de impacto genérico.\n\n"
+
+    "REGLAS DE ESTILO:\n"
+    "1. Voz activa, tono rioplatense natural, igual que el resto del medio.\n"
+    "2. Título preciso, máx 80 caracteres, sin exclamaciones ni sensacionalismo.\n"
+    "3. Prohibido el relleno metadiscursivo ('es importante destacar', 'cabe "
+    "señalar').\n"
+    "4. Slug URL-friendly: minúsculas, sin tildes, guiones, máx 60 chars.\n"
+    "5. Devolvé SOLO JSON válido, sin markdown ni texto extra.\n\n"
+
+    "Formato JSON de respuesta:\n"
+    "{\n"
+    '  "titulo": "Título periodístico preciso (máx 80 caracteres)",\n'
+    '  "cuerpo": "Lead\\n\\nDesarrollo...\\n\\nCierre con la aclaración de fuente/verificación",\n'
+    '  "resumen_seo": "150-160 caracteres para Google, incluir Necochea",\n'
+    '  "instagram_text": "Cuerpo del caption de Instagram, en 2 a 4 párrafos separados por \\n\\n, terminando con “👉 Nota completa: Link en bio” como párrafo aparte y 3 a 5 hashtags en el último párrafo",\n'
+    '  "instagram_titulo": "Título/gancho para Instagram en MAYÚSCULAS, corto (máx 60 caracteres)",\n'
+    '  "twitter_text": "Dato más relevante + #Necochea (máx 280 chars)",\n'
+    '  "guion_video": "Intro 5seg + desarrollo 20seg + cierre 5seg a cámara",\n'
+    '  "slug": "titulo-url-friendly-sin-tildes-max-60-chars",\n'
+    '  "seccion_sugerida": "Política|Economía|Policiales|Local|Deportes|Sociedad|Salud|Cultura",\n'
+    '  "tiene_perspectiva_editorial": false\n'
+    "}"
+)
+
+
 class AIProcessor:
     """
     Procesador de noticias multi-proveedor.
@@ -367,6 +430,49 @@ class AIProcessor:
 
         logger.info("Multi-source OK | slug=%s | fuentes=%s | titulo=%s",
                     parsed.get("slug"), len(textos), parsed.get("titulo","")[:50])
+        return parsed
+
+    def process_citizen_tip(
+        self,
+        mensaje: str,
+        categoria: str,
+        contacto_nombre: Optional[str] = None,
+        imagenes_urls: Optional[List[str]] = None,
+    ) -> Dict:
+        """
+        Redacta una nota periodística a partir de un aviso ciudadano recibido
+        por el formulario web (bandeja "Envíos" del panel admin). A diferencia
+        de process_article/process_multi_source, el material de entrada no es
+        un cable de otro medio sino un relato sin verificar -- ver TIP_SYSTEM_PROMPT.
+        """
+        mensaje = mensaje[:4500] + "..." if len(mensaje) > 4500 else mensaje
+
+        user_prompt = (
+            f"Categoría sugerida: {categoria}\n"
+            f"Nombre de contacto: {contacto_nombre or 'no informado'}\n"
+            f"Cantidad de imágenes adjuntas: {len(imagenes_urls or [])}\n"
+            f"Relato del vecino:\n{mensaje}\n"
+        )
+
+        text = self._call_with_retry(user_prompt, system_prompt=TIP_SYSTEM_PROMPT)
+        parsed = self._safe_json_parse(text)
+
+        if parsed.get("publicar") is False:
+            logger.info("IA sugirió no publicar tip: %s | motivo: %s",
+                        mensaje[:60], parsed.get("motivo", "sin motivo"))
+            raise ValueError(f"IA descartó el envío ciudadano: {parsed.get('motivo', 'sin motivo')}")
+
+        required_fields = [
+            "titulo", "cuerpo", "resumen_seo",
+            "instagram_text", "instagram_titulo", "twitter_text", "guion_video",
+            "slug", "seccion_sugerida",
+        ]
+        missing = [f for f in required_fields if f not in parsed]
+        if missing:
+            raise ValueError(f"IA no devolvió campos requeridos: {', '.join(missing)}")
+
+        logger.info("Envío ciudadano procesado OK | provider=%s | slug=%s",
+                    self.provider, parsed.get("slug"))
         return parsed
 
     def _call_with_retry(self, user_prompt: str, max_retries: int = 3,

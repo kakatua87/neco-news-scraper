@@ -667,6 +667,35 @@ async def procesar_grupo(request: Request) -> Dict:
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/procesar-tip", dependencies=[Depends(require_internal_secret)])
+async def procesar_tip(request: Request) -> Dict:
+    """
+    Redacta una nota a partir de un envío ciudadano (bandeja "Envíos" del panel admin).
+    Body: { mensaje, categoria, contacto_nombre?, imagenes_urls?: [...], provider? }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "error": "json inválido"}
+
+    mensaje: str = (body.get("mensaje") or "").strip()
+    categoria: str = body.get("categoria", "Local")
+    contacto_nombre: Optional[str] = body.get("contacto_nombre")
+    imagenes_urls: List[str] = body.get("imagenes_urls", [])
+    provider: Optional[str] = (body.get("provider") or "").strip() or None
+
+    if not mensaje:
+        return {"ok": False, "error": "mensaje es obligatorio"}
+
+    try:
+        ai = AIProcessor(provider=provider)
+        result = ai.process_citizen_tip(mensaje, categoria, contacto_nombre, imagenes_urls)
+        return {"ok": True, **result}
+    except Exception as e:
+        logger.exception("Error en /procesar-tip")
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/run", dependencies=[Depends(require_internal_secret)])
 async def manual_run() -> Dict:
     """Ejecuta pipeline_scraping() manualmente (para debug)."""

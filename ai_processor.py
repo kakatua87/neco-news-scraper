@@ -295,6 +295,50 @@ TIP_SYSTEM_PROMPT = (
 )
 
 
+REDACCION_SYSTEM_PROMPT = (
+    f"Sos el editor de estilo senior de {config.PORTAL_NAME}, diario digital de "
+    "Necochea, Argentina. Vas a pulir una nota que YA escribió un periodista "
+    "de la propia redacción -- no es un borrador ciudadano ni un cable de otro "
+    "medio, es reporteo propio ya verificado por el staff. Tu trabajo es "
+    "prolijar la redacción (ortografía, ritmo, estructura) y generar los "
+    "campos adicionales del sistema, SIN cambiar los hechos, citas, cifras ni "
+    "el sentido de lo que el periodista quiso contar.\n\n"
+
+    "REGLAS NO NEGOCIABLES:\n"
+    "- No inventes, no agregues ni quites datos, nombres, cifras o citas que "
+    "no estén en el original.\n"
+    "- Podés reordenar oraciones, corregir gramática/ortografía y mejorar la "
+    "fluidez, pero el contenido informativo tiene que ser el mismo.\n"
+    "- Si el texto ya trae subtítulos marcados con '## ', respetalos y "
+    "mejoralos en vez de borrarlos; si no trae, agregalos solo si la nota "
+    "tiene 2 o más bloques temáticos distintos (igual criterio que para "
+    "cualquier nota del medio).\n\n"
+
+    "REGLAS DE ESTILO:\n"
+    "1. Voz activa, tono rioplatense natural, igual que el resto del medio.\n"
+    "2. Título: si el original ya es preciso y claro dejalo, si se puede "
+    "mejorar la precisión sin cambiar el sentido, hacelo (máx 80 caracteres).\n"
+    "3. Prohibido el relleno metadiscursivo ('es importante destacar', 'cabe "
+    "señalar').\n"
+    "4. Slug URL-friendly: minúsculas, sin tildes, guiones, máx 60 chars.\n"
+    "5. Devolvé SOLO JSON válido, sin markdown ni texto extra.\n\n"
+
+    "Formato JSON de respuesta:\n"
+    "{\n"
+    '  "titulo": "Título final (máx 80 caracteres)",\n'
+    '  "cuerpo": "El cuerpo pulido, respetando párrafos y subtítulos ''## '' del original",\n'
+    '  "resumen_seo": "150-160 caracteres para Google, incluir Necochea",\n'
+    '  "instagram_text": "Cuerpo del caption de Instagram, en 2 a 4 párrafos separados por \\n\\n, terminando con “👉 Nota completa: Link en bio” como párrafo aparte y 3 a 5 hashtags en el último párrafo",\n'
+    '  "instagram_titulo": "Título/gancho para Instagram en MAYÚSCULAS, corto (máx 60 caracteres)",\n'
+    '  "twitter_text": "Dato más relevante + #Necochea (máx 280 chars)",\n'
+    '  "guion_video": "Intro 5seg + desarrollo 20seg + cierre 5seg a cámara",\n'
+    '  "slug": "titulo-url-friendly-sin-tildes-max-60-chars",\n'
+    '  "seccion_sugerida": "Política|Economía|Policiales|Local|Deportes|Sociedad|Salud|Cultura",\n'
+    '  "tiene_perspectiva_editorial": false\n'
+    "}"
+)
+
+
 class AIProcessor:
     """
     Procesador de noticias multi-proveedor.
@@ -472,6 +516,37 @@ class AIProcessor:
             raise ValueError(f"IA no devolvió campos requeridos: {', '.join(missing)}")
 
         logger.info("Envío ciudadano procesado OK | provider=%s | slug=%s",
+                    self.provider, parsed.get("slug"))
+        return parsed
+
+    def process_redaccion_draft(self, titulo: str, cuerpo: str, seccion: str) -> Dict:
+        """
+        Pule una nota ya escrita por el propio staff (pestaña "Redacción" del
+        panel admin) y genera los campos adicionales. A diferencia de
+        process_citizen_tip, el material es reporteo propio ya verificado --
+        ver REDACCION_SYSTEM_PROMPT.
+        """
+        cuerpo = cuerpo[:6000] + "..." if len(cuerpo) > 6000 else cuerpo
+
+        user_prompt = (
+            f"Sección: {seccion}\n"
+            f"Título original: {titulo}\n"
+            f"Cuerpo original:\n{cuerpo}\n"
+        )
+
+        text = self._call_with_retry(user_prompt, system_prompt=REDACCION_SYSTEM_PROMPT)
+        parsed = self._safe_json_parse(text)
+
+        required_fields = [
+            "titulo", "cuerpo", "resumen_seo",
+            "instagram_text", "instagram_titulo", "twitter_text", "guion_video",
+            "slug", "seccion_sugerida",
+        ]
+        missing = [f for f in required_fields if f not in parsed]
+        if missing:
+            raise ValueError(f"IA no devolvió campos requeridos: {', '.join(missing)}")
+
+        logger.info("Borrador de redacción procesado OK | provider=%s | slug=%s",
                     self.provider, parsed.get("slug"))
         return parsed
 

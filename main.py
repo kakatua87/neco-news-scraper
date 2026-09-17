@@ -667,6 +667,34 @@ async def procesar_grupo(request: Request) -> Dict:
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/procesar-redaccion", dependencies=[Depends(require_internal_secret)])
+async def procesar_redaccion(request: Request) -> Dict:
+    """
+    Pule un borrador escrito por el staff en la pestaña "Redacción" del panel admin.
+    Body: { titulo, cuerpo, seccion?, provider? }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "error": "json inválido"}
+
+    titulo: str = (body.get("titulo") or "").strip()
+    cuerpo: str = (body.get("cuerpo") or "").strip()
+    seccion: str = body.get("seccion", "Local")
+    provider: Optional[str] = (body.get("provider") or "").strip() or None
+
+    if not cuerpo:
+        return {"ok": False, "error": "cuerpo es obligatorio"}
+
+    try:
+        ai = AIProcessor(provider=provider)
+        result = ai.process_redaccion_draft(titulo, cuerpo, seccion)
+        return {"ok": True, **result}
+    except Exception as e:
+        logger.exception("Error en /procesar-redaccion")
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/procesar-tip", dependencies=[Depends(require_internal_secret)])
 async def procesar_tip(request: Request) -> Dict:
     """

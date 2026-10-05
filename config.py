@@ -29,11 +29,13 @@ AI_BASE_URL: str = os.getenv("AI_BASE_URL", "").strip()
 # selector del panel admin (GET /ai-providers).
 _PROVIDER_DEFAULTS = {
     "gemini": {
-        # gemini-2.0-flash fue dado de baja por Google (confirmado con 404
-        # real en agosto 2026) — este es el reemplazo vigente al día de hoy.
-        "model": "gemini-2.5-flash",
+        # Google fue dando de baja modelos para cuentas nuevas: gemini-2.0-flash
+        # (404 en agosto 2026) y gemini-2.5-flash (404 en octubre 2026, "no longer
+        # available to new users", que indica gemini-3.8-flash como reemplazo).
+        # Se puede cambiar sin tocar código con la variable de entorno AI_MODEL.
+        "model": "gemini-3.8-flash",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "label": "Google Gemini 2.5 Flash",
+        "label": "Google Gemini 3.8 Flash",
         "gratis": True,
     },
     "openai": {

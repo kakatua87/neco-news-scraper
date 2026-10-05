@@ -392,7 +392,16 @@ class AIProcessor:
             f" | {len(self._fallback_keys)} keys disponibles con fallback" if self._fallback_keys else "",
         )
 
-    def _rotar_a_siguiente_key(self) -> bool:
+    @staticmethod
+    def _es_key_invalida(error: APIError) -> bool:
+        """True si Google rechazó la API key en sí (revocada, borrada o mal copiada):
+        401/403, o el 400 "API key not valid" / "Please pass a valid API key"."""
+        status = getattr(error, "status_code", None)
+        if status in (401, 403):
+            return True
+        return status == 400 and "api key" in str(error).lower()
+
+    def _rotar_a_siguiente_key(self, motivo: str = "sin cuota") -> bool:
         """Cambia self.client a la siguiente API key de Gemini disponible.
         Devuelve False si ya no quedan más keys para probar."""
         if self._key_index + 1 >= len(self._fallback_keys):
@@ -401,8 +410,8 @@ class AIProcessor:
         nueva_key = self._fallback_keys[self._key_index]
         self.client = OpenAI(api_key=nueva_key, base_url=self.base_url)
         logger.warning(
-            "Gemini key #%s sin cuota — rotando a key #%s de %s.",
-            self._key_index, self._key_index + 1, len(self._fallback_keys),
+            "Gemini key #%s %s — rotando a key #%s de %s.",
+            self._key_index, motivo, self._key_index + 1, len(self._fallback_keys),
         )
         return True
 
@@ -553,7 +562,8 @@ class AIProcessor:
     def _call_with_retry(self, user_prompt: str, max_retries: int = 3,
                          system_prompt: str | None = None) -> str:
         """Llama a la API con backoff exponencial. Si hay varias API keys de
-        Gemini cargadas, un 429 rota a la siguiente key antes de esperar."""
+        Gemini cargadas, un 429 (sin cuota) o una key inválida rotan a la siguiente key
+        antes de esperar o abortar."""
         last_err: Optional[Exception] = None
         delays = [2, 4, 8]  # Backoff: 2s, 4s, 8s
 
@@ -620,6 +630,8 @@ class AIProcessor:
             except APIError as e:
                 last_err = e
                 logger.error("Error API en intento %s/%s: %s", attempt + 1, max_retries, str(e)[:300])
+                if self._fallback_keys and self._es_key_invalida(e) and self._rotar_a_siguiente_key("inválida"):
+                    continue  # probó con otra key de Gemini en vez de abortar
                 if e.status_code and e.status_code >= 500:
                     time.sleep(delays[min(attempt, len(delays) - 1)])
                     continue

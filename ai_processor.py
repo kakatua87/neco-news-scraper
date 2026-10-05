@@ -382,6 +382,12 @@ class AIProcessor:
         if self._fallback_keys:
             api_key = self._fallback_keys[0]
 
+        # Modelos alternativos (solo Gemini): se usan si el principal está saturado
+        # (503) o dado de baja (404) — ver _call_with_retry().
+        self._fallback_models: List[str] = (
+            [m for m in config.AI_FALLBACK_MODELS if m != self.model] if self.provider == "gemini" else []
+        )
+
         self.base_url = base_url
         self.client = OpenAI(api_key=api_key, base_url=base_url)
 
@@ -400,6 +406,11 @@ class AIProcessor:
         if status in (401, 403):
             return True
         return status == 400 and "api key" in str(error).lower()
+
+    @staticmethod
+    def _modelo_no_disponible(error: APIError) -> bool:
+        """True si el modelo en sí no puede atender: saturado (503 UNAVAILABLE) o dado de baja (404)."""
+        return getattr(error, "status_code", None) in (404, 503)
 
     def _rotar_a_siguiente_key(self, motivo: str = "sin cuota") -> bool:
         """Cambia self.client a la siguiente API key de Gemini disponible.
@@ -572,10 +583,16 @@ class AIProcessor:
             # tener algún reintento real en la última.
             max_retries = max(max_retries, len(self._fallback_keys) + 1)
 
+        # Modelo principal primero; si no puede atender (503/404) se pasa al siguiente.
+        # Es por llamada: la próxima noticia vuelve a intentar con el principal.
+        modelos = [self.model] + self._fallback_models
+        modelo_idx = 0
+        max_retries += len(self._fallback_models)
+
         for attempt in range(max_retries):
             try:
                 response = self.client.chat.completions.create(
-                    model=self.model,
+                    model=modelos[modelo_idx],
                     messages=[
                         {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt},
@@ -588,6 +605,9 @@ class AIProcessor:
                     # subtítulos) y rompe el parseo.
                     response_format={"type": "json_object"},
                 )
+
+                if modelo_idx > 0:
+                    logger.warning("IA respondió con el modelo alternativo %s", modelos[modelo_idx])
 
                 text = (response.choices[0].message.content or "").strip()
                 if not text:
@@ -632,6 +652,13 @@ class AIProcessor:
                 logger.error("Error API en intento %s/%s: %s", attempt + 1, max_retries, str(e)[:300])
                 if self._fallback_keys and self._es_key_invalida(e) and self._rotar_a_siguiente_key("inválida"):
                     continue  # probó con otra key de Gemini en vez de abortar
+                if modelo_idx + 1 < len(modelos) and self._modelo_no_disponible(e):
+                    logger.warning(
+                        "Modelo %s no disponible (%s) — pruebo con %s.",
+                        modelos[modelo_idx], e.status_code, modelos[modelo_idx + 1],
+                    )
+                    modelo_idx += 1
+                    continue  # el SDK ya reintentó este modelo; no tiene sentido esperar
                 if e.status_code and e.status_code >= 500:
                     time.sleep(delays[min(attempt, len(delays) - 1)])
                     continue

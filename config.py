@@ -25,6 +25,16 @@ AI_API_KEY: str = os.getenv("AI_API_KEY", "").strip()
 AI_MODEL: str = os.getenv("AI_MODEL", "").strip()
 AI_BASE_URL: str = os.getenv("AI_BASE_URL", "").strip()
 
+# Modelos alternativos de Gemini, en orden. Si el modelo principal responde 503
+# ("high demand", típico en un modelo recién lanzado) o 404 (dado de baja), el
+# procesador prueba con el siguiente en vez de fallar. Se pueden cambiar sin tocar
+# código con AI_FALLBACK_MODELS (separados por coma; vacío = sin alternativos).
+AI_FALLBACK_MODELS: list = [
+    m.strip()
+    for m in os.getenv("AI_FALLBACK_MODELS", "gemini-3.7-flash,gemini-3.5-flash-lite").split(",")
+    if m.strip()
+]
+
 # Defaults por proveedor. "label" y "gratis" son solo para mostrar en el
 # selector del panel admin (GET /ai-providers).
 _PROVIDER_DEFAULTS = {

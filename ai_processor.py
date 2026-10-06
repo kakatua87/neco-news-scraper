@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, List
 
 from openai import OpenAI, APIError, RateLimitError, APIConnectionError
@@ -23,6 +24,73 @@ import config
 logger = logging.getLogger("neconews.ai")
 
 # ─── Prompt editorial ────────────────────────────────────────────
+
+# ─── Reglas comunes a los prompts de reescritura ─────────────────
+# Viven en un solo lugar para que SYSTEM_PROMPT y MULTI_SOURCE_PROMPT no se
+# desalineen (antes cada uno tenía su copia y se contradecían).
+
+_DIAS_SEMANA = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+_MESES = [
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+]
+
+
+def _fecha_hoy_ar() -> str:
+    """Fecha de hoy en Argentina (UTC-3 fijo, no tiene horario de verano), p. ej. 'lunes 5 de octubre de 2026'.
+    Se le pasa al modelo para que convierta 'este martes' o 'el domingo' en fechas absolutas."""
+    ahora = datetime.now(timezone(timedelta(hours=-3)))
+    return f"{_DIAS_SEMANA[ahora.weekday()]} {ahora.day} de {_MESES[ahora.month - 1]} de {ahora.year}"
+
+
+REGLAS_COMUNES = (
+    "RIGOR SOBRE LOS DATOS (no negociable):\n"
+    "- Usá SOLO información que esté en el texto original. Nada de conocimiento "
+    "propio: ni contexto histórico, ni descripciones geográficas ('frente al "
+    "río', 'en pleno centro'), ni antecedentes, ni cargos, ni cifras que no "
+    "estén en el material, aunque estés casi seguro de que son ciertos. Si un "
+    "dato no está en el original, no existe para esta nota.\n"
+    "- Verificación final antes de responder: recorré cada nombre, cifra, fecha, "
+    "lugar y afirmación del cuerpo y confirmá que aparece en el original. Lo que "
+    "no aparezca, sacalo.\n\n"
+
+    "DATOS QUE NO PUEDEN FALTAR:\n"
+    "- Datos de servicio: fechas, horarios, lugares, direcciones, costos, "
+    "requisitos, cómo participar o inscribirse, hasta cuándo está disponible "
+    "algo y qué sigue después. Si el original los trae, van en el cuerpo.\n"
+    "- Declaraciones textuales: las citas de funcionarios, protagonistas o "
+    "voceros se incluyen ENTRE COMILLAS y atribuidas a quien las dijo, tal cual "
+    "figuran en el original. 'Cero frases copiadas' vale para la narración del "
+    "periodista, NO para las citas. Si hay una cita central, la nota no puede "
+    "omitirla ni parafrasearla.\n\n"
+
+    "FECHAS:\n"
+    "- El pedido trae 'Fecha de hoy'. Convertí toda referencia relativa del "
+    "original ('hoy', 'este martes', 'el venidero domingo', 'mañana', 'el fin de "
+    "semana') en una fecha absoluta, con día de la semana, número y mes (ej: "
+    "'el domingo 11 de octubre'), calculada desde esa fecha. Si el original ya "
+    "da la fecha exacta, usá esa. Si no podés determinarla con seguridad, no la "
+    "inventes: describí el momento sin fecha.\n\n"
+
+    "SECCIÓN ('seccion_sugerida'):\n"
+    "- Se decide por el TEMA, nunca por la geografía ni por la sección que venga "
+    "indicada en el pedido (esa es solo una pista del scraper y puede estar mal).\n"
+    "- Deportes: cualquier hecho deportivo, local, nacional o internacional "
+    "(selección, fútbol, básquet, torneos, clubes). Policiales: delitos, "
+    "accidentes, causas judiciales. Política: gobierno, elecciones, gestión, "
+    "legislación. Economía: precios, empleo, comercio, finanzas. Salud, Cultura "
+    "y Sociedad según el tema principal.\n"
+    "- 'Local' es solo para hechos que ocurren en Necochea y la región, o que los "
+    "afectan de forma concreta y mencionada en el original. Una noticia "
+    "nacional o internacional NO es Local por publicarse en un diario de "
+    "Necochea.\n\n"
+
+    "ESTILO — evitá los lugares comunes: 'el astro', 'el crack', 'viejo "
+    "conocido', 'glorioso', 'emotivo', 'multitudinario', 'dejó boquiabiertos', "
+    "'marcó un antes y un después', 'noche histórica' (salvo que sea un dato del "
+    "original). Describí el hecho con datos, no con adjetivos.\n\n"
+)
+
 
 SYSTEM_PROMPT = (
     f"Sos el redactor senior de {config.PORTAL_NAME}, diario digital de "
@@ -96,7 +164,7 @@ SYSTEM_PROMPT = (
     "un título corto (4-8 palabras), no una frase del cuerpo.\n\n"
 
     "REGLAS DE ESTILO:\n"
-    "1. Reescribí completamente. Cero frases copiadas del original.\n"
+    "1. Reescribí completamente la narración: cero frases copiadas del original (las citas textuales entre comillas son la única excepción).\n"
     "2. Voz activa siempre. Evitá 'se informó que', 'fue confirmado que'.\n"
     "3. Tono rioplatense natural: ni coloquial ni académico.\n"
     "4. Título: describe el hecho con precisión, máx 80 caracteres, "
@@ -123,14 +191,15 @@ SYSTEM_PROMPT = (
     "es el campo 'cuerpo', que sí puede contener líneas '## Subtítulo' como se "
     "explicó arriba — eso no es markdown libre, es el único marcador permitido).\n\n"
 
+    + REGLAS_COMUNES +
     "Formato JSON de respuesta:\n"
     "{\n"
     '  "titulo": "Título periodístico preciso (máx 80 caracteres)",\n'
     '  "cuerpo": "Lead\\n\\n## Subtítulo del primer bloque\\n\\nDesarrollo...\\n\\n## Subtítulo del cierre\\n\\nCierre con perspectiva si aplica",\n'
-    '  "resumen_seo": "150-160 caracteres para Google, incluir Necochea",\n'
+    '  "resumen_seo": "150-160 caracteres para Google; mencioná Necochea solo si la nota tiene relación concreta con la ciudad o la región",\n'
     '  "instagram_text": "Cuerpo del caption de Instagram, en 2 a 4 párrafos separados por \\n\\n: 1-2 párrafos cortos con el gancho y los datos más importantes (si hay 2+ datos puntuales para destacar -- cifras, nombres, resultados -- listalos en líneas separadas con un emoji al inicio de cada una); después, como párrafo aparte, EXACTAMENTE este texto sin modificarlo: “👉 Nota completa: Link en bio”; y como último párrafo, 3 a 5 hashtags relevantes en español",\n'
     '  "instagram_titulo": "Título/gancho para Instagram tipo copete de portada, en MAYÚSCULAS, corto y directo (máx 60 caracteres), sin hashtags, sin emojis, sin punto final",\n'
-    '  "twitter_text": "Dato más relevante + #Necochea (máx 280 chars)",\n'
+    '  "twitter_text": "Dato más relevante + hashtag del tema (#Necochea solo si la nota es local; máx 280 chars)",\n'
     '  "guion_video": "Intro 5seg + desarrollo 20seg + cierre 5seg a cámara",\n'
     '  "slug": "titulo-url-friendly-sin-tildes-max-60-chars",\n'
     '  "seccion_sugerida": "Política|Economía|Policiales|Local|Deportes|Sociedad|Salud|Cultura",\n'
@@ -165,7 +234,7 @@ MULTI_SOURCE_PROMPT = (
     "si esa otra versión no lo dice explícitamente sobre el mismo punto.\n"
     "- El resultado tiene que leerse como UNA sola nota con hilo narrativo "
     "propio — lead que plantea el hecho, desarrollo que lo explica con los "
-    "datos cruzados, cierre que conecta con el impacto local — y no como "
+    "datos cruzados, cierre con el dato o la consecuencia más relevante del material — y no como "
     "una lista de datos de cada fuente pegados en orden.\n"
     "- Si las versiones se contradicen en un dato central y no podés "
     "resolverlo con el resto del texto, señalalo con una frase explícita en "
@@ -200,7 +269,7 @@ MULTI_SOURCE_PROMPT = (
     "ameritan es exactamente lo que hay que evitar.\n\n"
 
     "REGLAS:\n"
-    "1. Cero frases copiadas de ninguna fuente.\n"
+    "1. Reescribí la narración sin copiar frases de ninguna fuente (las citas textuales entre comillas son la única excepción).\n"
     "2. PROHIBIDO citar, nombrar o aludir de cualquier forma a los medios de donde "
     "salen las versiones (ni sus nombres, ni frases genéricas tipo 'medios locales "
     "informaron', 'distintos medios de Necochea publicaron', 'trascendió en otros "
@@ -216,14 +285,15 @@ MULTI_SOURCE_PROMPT = (
     "5. Solo JSON válido como respuesta (excepto las líneas '## Subtítulo' dentro "
     "de 'cuerpo', que son el único marcador permitido).\n\n"
 
+    + REGLAS_COMUNES +
     "Formato JSON:\n"
     "{\n"
     '  "titulo": "Título periodístico preciso (máx 80 caracteres)",\n'
     '  "cuerpo": "Lead\\n\\n## Subtítulo del desarrollo\\n\\nDesarrollo...\\n\\nCierre",\n'
-    '  "resumen_seo": "150-160 caracteres para Google, incluir Necochea",\n'
+    '  "resumen_seo": "150-160 caracteres para Google; mencioná Necochea solo si la nota tiene relación concreta con la ciudad o la región",\n'
     '  "instagram_text": "Cuerpo del caption de Instagram, en 2 a 4 párrafos separados por \\n\\n: 1-2 párrafos cortos con el gancho y los datos más importantes (si hay 2+ datos puntuales para destacar -- cifras, nombres, resultados -- listalos en líneas separadas con un emoji al inicio de cada una); después, como párrafo aparte, EXACTAMENTE este texto sin modificarlo: “👉 Nota completa: Link en bio”; y como último párrafo, 3 a 5 hashtags relevantes en español",\n'
     '  "instagram_titulo": "Título/gancho para Instagram tipo copete de portada, en MAYÚSCULAS, corto y directo (máx 60 caracteres), sin hashtags, sin emojis, sin punto final",\n'
-    '  "twitter_text": "Dato clave + #Necochea (máx 280 chars)",\n'
+    '  "twitter_text": "Dato clave + hashtag del tema (#Necochea solo si la nota es local; máx 280 chars)",\n'
     '  "guion_video": "Intro 5seg + desarrollo 20seg + cierre 5seg",\n'
     '  "slug": "titulo-url-friendly-sin-tildes",\n'
     '  "seccion_sugerida": "Política|Economía|Policiales|Local|Deportes|Sociedad|Salud|Cultura",\n'
@@ -283,7 +353,7 @@ TIP_SYSTEM_PROMPT = (
     "{\n"
     '  "titulo": "Título periodístico preciso (máx 80 caracteres)",\n'
     '  "cuerpo": "Lead\\n\\nDesarrollo...\\n\\nCierre con la aclaración de fuente/verificación",\n'
-    '  "resumen_seo": "150-160 caracteres para Google, incluir Necochea",\n'
+    '  "resumen_seo": "150-160 caracteres para Google; mencioná Necochea solo si la nota tiene relación concreta con la ciudad o la región",\n'
     '  "instagram_text": "Cuerpo del caption de Instagram, en 2 a 4 párrafos separados por \\n\\n, terminando con “👉 Nota completa: Link en bio” como párrafo aparte y 3 a 5 hashtags en el último párrafo",\n'
     '  "instagram_titulo": "Título/gancho para Instagram en MAYÚSCULAS, corto (máx 60 caracteres)",\n'
     '  "twitter_text": "Dato más relevante + #Necochea (máx 280 chars)",\n'
@@ -327,7 +397,7 @@ REDACCION_SYSTEM_PROMPT = (
     "{\n"
     '  "titulo": "Título final (máx 80 caracteres)",\n'
     '  "cuerpo": "El cuerpo pulido, respetando párrafos y subtítulos ''## '' del original",\n'
-    '  "resumen_seo": "150-160 caracteres para Google, incluir Necochea",\n'
+    '  "resumen_seo": "150-160 caracteres para Google; mencioná Necochea solo si la nota tiene relación concreta con la ciudad o la región",\n'
     '  "instagram_text": "Cuerpo del caption de Instagram, en 2 a 4 párrafos separados por \\n\\n, terminando con “👉 Nota completa: Link en bio” como párrafo aparte y 3 a 5 hashtags en el último párrafo",\n'
     '  "instagram_titulo": "Título/gancho para Instagram en MAYÚSCULAS, corto (máx 60 caracteres)",\n'
     '  "twitter_text": "Dato más relevante + #Necochea (máx 280 chars)",\n'
@@ -436,7 +506,8 @@ class AIProcessor:
         cuerpo = cuerpo[:4500] + "..." if len(cuerpo) > 4500 else cuerpo
 
         user_prompt = (
-            f"Sección: {seccion}\n"
+            f"Fecha de hoy: {_fecha_hoy_ar()}\n"
+            f"Sección indicada por el scraper (solo una pista, puede estar mal): {seccion}\n"
             f"Título original: {titulo}\n"
             f"Cuerpo original:\n{cuerpo}\n"
         )
@@ -473,7 +544,8 @@ class AIProcessor:
             f"[Versión {i+1}]:\n{t}" for i, t in enumerate(textos)
         )
         user_prompt = (
-            f"Sección: {seccion}\n"
+            f"Fecha de hoy: {_fecha_hoy_ar()}\n"
+            f"Sección indicada por el scraper (solo una pista, puede estar mal): {seccion}\n"
             f"Título referencial: {titulo}\n"
             f"Cantidad de fuentes: {len(textos)}\n"
             f"\nA continuación las {len(textos)} versiones del mismo hecho:\n\n"

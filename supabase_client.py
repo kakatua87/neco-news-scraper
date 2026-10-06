@@ -261,7 +261,7 @@ class SupabaseNewsClient:
                 "twitter_text": datos_ia.get("twitter_text", ""),
                 "guion_video": datos_ia.get("guion_video", ""),
                 "slug": datos_ia.get("slug", "").strip(),
-                "seccion": datos_ia.get("seccion_sugerida") or seccion_fallback,
+                "seccion": datos_ia.get("seccion") or datos_ia.get("seccion_sugerida") or seccion_fallback,
                 "estado": "pendiente",
             }
             if datos_ia.get("fuente"):

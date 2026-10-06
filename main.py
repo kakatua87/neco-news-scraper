@@ -550,6 +550,11 @@ def pipeline_ia(
         logger.exception("IA falló en pipeline_ia para grupo_id=%s", grupo_id)
         return {"ok": False, "error": f"IA falló: {str(e)[:200]}"}
 
+    # La sección que eligió el editor en la bandeja manda; la IA solo sugiere
+    # (rewritten['seccion_sugerida'] queda disponible pero ya no pisa la elección).
+    if seccion:
+        rewritten["seccion"] = seccion
+
     # Actualizar la nota líder en Supabase (estado=pendiente)
     rewritten["imagen_url"] = best_image
     rewritten["fuentes_urls"] = fuentes_urls

@@ -25,6 +25,11 @@ AI_API_KEY: str = os.getenv("AI_API_KEY", "").strip()
 AI_MODEL: str = os.getenv("AI_MODEL", "").strip()
 AI_BASE_URL: str = os.getenv("AI_BASE_URL", "").strip()
 
+# Revisión automática de la nota redactada: detecta tramos copiados de la fuente y citas
+# alteradas, y si encuentra alguno le pide al modelo UNA corrección. Cuesta una llamada
+# extra solo cuando hay problemas. Se apaga con AI_REVISION_AUTOMATICA=false.
+AI_REVISION_AUTOMATICA: bool = os.getenv("AI_REVISION_AUTOMATICA", "true").strip().lower() not in ("0", "false", "no")
+
 # Modelos alternativos de Gemini, en orden. Si el modelo principal responde 503
 # ("high demand", típico en un modelo recién lanzado) o 404 (dado de baja), el
 # procesador prueba con el siguiente en vez de fallar. Se pueden cambiar sin tocar

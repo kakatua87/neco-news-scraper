@@ -20,6 +20,7 @@ from typing import Dict, Optional, List
 from openai import OpenAI, APIError, RateLimitError, APIConnectionError
 
 import config
+import redaccion_check
 
 logger = logging.getLogger("neconews.ai")
 
@@ -43,6 +44,18 @@ def _fecha_hoy_ar() -> str:
     return f"{_DIAS_SEMANA[ahora.weekday()]} {ahora.day} de {_MESES[ahora.month - 1]} de {ahora.year}"
 
 
+# Se agrega al FINAL de cada pedido (después del texto de las fuentes): los modelos livianos
+# siguen mejor las instrucciones que están pegadas al final.
+CHECKLIST_FINAL = (
+    "\nANTES DE RESPONDER, verificá:\n"
+    "1. Fechas relativas convertidas a fechas absolutas.\n"
+    "2. Datos de servicio (fechas, horarios, lugares, cómo participar) incluidos.\n"
+    "3. Declaraciones: solo las frases más fuertes, literales, entre comillas y con autor; "
+    "el resto, con tus palabras.\n"
+    "4. Ningún dato, descripción ni palabra dentro de una cita que no esté en el material.\n"
+    "5. Lead, orden y subtítulos propios: nada de más de 8 palabras seguidas copiadas fuera de comillas.\n"
+)
+
 REGLAS_COMUNES = (
     "RIGOR SOBRE LOS DATOS (no negociable):\n"
     "- Usá SOLO información que esté en el texto original. Nada de conocimiento "
@@ -58,11 +71,21 @@ REGLAS_COMUNES = (
     "- Datos de servicio: fechas, horarios, lugares, direcciones, costos, "
     "requisitos, cómo participar o inscribirse, hasta cuándo está disponible "
     "algo y qué sigue después. Si el original los trae, van en el cuerpo.\n"
-    "- Declaraciones textuales: las citas de funcionarios, protagonistas o "
-    "voceros se incluyen ENTRE COMILLAS y atribuidas a quien las dijo, tal cual "
-    "figuran en el original. 'Cero frases copiadas' vale para la narración del "
-    "periodista, NO para las citas. Si hay una cita central, la nota no puede "
-    "omitirla ni parafrasearla.\n\n"
+    "- Declaraciones: si el original trae palabras de funcionarios, protagonistas o "
+    "voceros, la nota las incluye (cómo citarlas: ver 'REDACCIÓN PROPIA'). Si hay "
+    "una declaración central, no la omitas.\n\n"
+    "REDACCIÓN PROPIA (la nota tiene que parecer producción de nuestra redacción):\n"
+    "- Tiene que leerse como una nota escrita por nuestro medio, no como el texto de "
+    "otro medio con palabras cambiadas. Armá TU propia estructura: elegí tu propio "
+    "lead (no abras como abre la fuente), reordená la información por importancia "
+    "periodística, usá tus propios subtítulos y construcciones de frase.\n"
+    "- No repitas más de 8 palabras seguidas tomadas de la fuente fuera de las "
+    "comillas. Cambiar sinónimos no alcanza: cambiá la sintaxis y el orden.\n"
+    "- Citas: de cada declaración incluí solo la frase (o las dos frases) más fuerte, "
+    "textual, entre comillas y atribuida a quien la dijo (con su cargo si figura). El "
+    "resto de lo que dijo contalo con tus palabras. No transcribas declaraciones "
+    "enteras. No alteres ni una palabra de lo que va entre comillas; si no podés "
+    "citarlo tal cual, contalo sin comillas.\n\n"
 
     "FECHAS:\n"
     "- El pedido trae 'Fecha de hoy'. Convertí toda referencia relativa del "
@@ -496,6 +519,48 @@ class AIProcessor:
         )
         return True
 
+    _CAMPOS_NOTA = (
+        "titulo", "cuerpo", "resumen_seo", "instagram_text", "instagram_titulo",
+        "twitter_text", "guion_video", "slug", "seccion_sugerida",
+    )
+
+    def _revisar_redaccion(self, parsed: Dict, textos: List[str], user_prompt: str,
+                           system_prompt: Optional[str]) -> Dict:
+        """Controla que la nota no copie tramos de la fuente fuera de comillas ni altere citas.
+        Si hay problemas pide UNA corrección al modelo y se queda con la versión que tenga
+        menos. Nunca rompe el flujo: ante cualquier falla devuelve el borrador original."""
+        if not config.AI_REVISION_AUTOMATICA:
+            return parsed
+        try:
+            copiadas, alteradas = redaccion_check.revisar(parsed.get("cuerpo", ""), textos)
+            if not copiadas and not alteradas:
+                return parsed
+
+            logger.warning(
+                "Revisión de redacción | %s tramo(s) copiado(s) y %s cita(s) alterada(s) — pido una corrección. "
+                "Copiado: %s | Citas: %s",
+                len(copiadas), len(alteradas),
+                [c[:80] for c in copiadas[:2]], [c[:80] for c in alteradas[:2]],
+            )
+            text = self._call_with_retry(
+                user_prompt + redaccion_check.armar_correccion(copiadas, alteradas),
+                system_prompt=system_prompt,
+            )
+            nuevo = self._safe_json_parse(text)
+            if any(campo not in nuevo for campo in self._CAMPOS_NOTA):
+                logger.warning("La corrección vino incompleta; me quedo con el borrador original.")
+                return parsed
+
+            copiadas2, alteradas2 = redaccion_check.revisar(nuevo.get("cuerpo", ""), textos)
+            if len(copiadas2) + len(alteradas2) <= len(copiadas) + len(alteradas):
+                logger.info("Corrección aplicada | copiado %s→%s | citas alteradas %s→%s",
+                            len(copiadas), len(copiadas2), len(alteradas), len(alteradas2))
+                return nuevo
+            logger.warning("La corrección no mejoró el borrador; me quedo con el original.")
+        except Exception:
+            logger.exception("Falló la revisión automática de la redacción; se usa el borrador original.")
+        return parsed
+
     def process_article(self, titulo: str, cuerpo: str, seccion: str, fuente: Optional[str] = None) -> Dict:
         """
         Reescribe una noticia usando IA.
@@ -510,6 +575,7 @@ class AIProcessor:
             f"Sección indicada por el scraper (solo una pista, puede estar mal): {seccion}\n"
             f"Título original: {titulo}\n"
             f"Cuerpo original:\n{cuerpo}\n"
+            f"{CHECKLIST_FINAL}"
         )
 
         text = self._call_with_retry(user_prompt)
@@ -529,6 +595,8 @@ class AIProcessor:
         missing = [f for f in required_fields if f not in parsed]
         if missing:
             raise ValueError(f"IA no devolvió campos requeridos: {', '.join(missing)}")
+
+        parsed = self._revisar_redaccion(parsed, [cuerpo], user_prompt, None)
 
         logger.info("Artículo procesado OK | provider=%s | slug=%s", self.provider, parsed.get("slug"))
         return parsed
@@ -550,6 +618,7 @@ class AIProcessor:
             f"Cantidad de fuentes: {len(textos)}\n"
             f"\nA continuación las {len(textos)} versiones del mismo hecho:\n\n"
             f"{sources_block}\n"
+            f"{CHECKLIST_FINAL}"
         )
 
         text = self._call_with_retry(user_prompt, system_prompt=MULTI_SOURCE_PROMPT)
@@ -563,6 +632,8 @@ class AIProcessor:
         missing = [f for f in required_fields if f not in parsed]
         if missing:
             raise ValueError(f"IA no devolvió campos requeridos: {', '.join(missing)}")
+
+        parsed = self._revisar_redaccion(parsed, textos, user_prompt, MULTI_SOURCE_PROMPT)
 
         logger.info("Multi-source OK | slug=%s | fuentes=%s | titulo=%s",
                     parsed.get("slug"), len(textos), parsed.get("titulo","")[:50])

@@ -54,6 +54,7 @@ CHECKLIST_FINAL = (
     "el resto, con tus palabras.\n"
     "4. Ningún dato, descripción ni palabra dentro de una cita que no esté en el material.\n"
     "5. Lead, orden y subtítulos propios: nada de más de 8 palabras seguidas copiadas fuera de comillas.\n"
+    "6. Cada protagonista con su cargo o rol completo, cifras exactas y cada hecho atribuido a quien corresponde.\n"
 )
 
 REGLAS_COMUNES = (
@@ -81,6 +82,17 @@ REGLAS_COMUNES = (
     "periodística, usá tus propios subtítulos y construcciones de frase.\n"
     "- No repitas más de 8 palabras seguidas tomadas de la fuente fuera de las "
     "comillas. Cambiar sinónimos no alcanza: cambiá la sintaxis y el orden.\n"
+    "- Presentá a cada protagonista con su cargo o rol completo tal como figura en la "
+    "fuente (por ejemplo 'el enviado especial de Estados Unidos para monitorear y "
+    "combatir el antisemitismo', no solo 'un enviado'). El rol de quien habla es parte "
+    "de la noticia: no lo recortes ni lo cambies por uno más vago.\n"
+    "- Reordená de verdad: abrí con lo que más le importa a NUESTRO lector, no con el "
+    "orden en que la fuente cuenta las cosas, y armá el cuerpo en el orden que tenga "
+    "sentido periodístico. Unilo con conectores que expliquen la relación entre los "
+    "datos; evitá 'asimismo', 'en paralelo' o 'por su parte' como relleno.\n"
+    "- Conservá las cifras tal como vienen ('32 años', no 'más de tres décadas') y "
+    "respetá quién hizo qué: si la fuente atribuye un hecho a alguien (por ejemplo, "
+    "los autores de un atentado), la nota también.\n"
     "- Citas: de cada declaración incluí solo la frase (o las dos frases) más fuerte, "
     "textual, entre comillas y atribuida a quien la dijo (con su cargo si figura). El "
     "resto de lo que dijo contalo con tus palabras. No transcribas declaraciones "

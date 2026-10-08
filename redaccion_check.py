@@ -17,10 +17,21 @@ from typing import List, Sequence, Tuple
 # Cantidad de palabras seguidas iguales a la fuente (fuera de comillas) a partir de la
 # cual se considera copia. Con 9 no saltan los nombres propios ni las frases hechas.
 PALABRAS_COPIA = 9
-# Un tramo copiado solo cuenta si tiene al menos tantas palabras en minúscula: así los
-# nombres con cargo ("la ministra de Deportes, Juventud y Empleo, Annick ...") no
-# disparan falsos positivos.
+# Un tramo copiado solo cuenta si tiene al menos tantas palabras "de contenido" en
+# minúscula. Así no disparan falsos positivos los datos que no se pueden decir de otra
+# forma: nombres con cargo ("la ministra de Deportes, Juventud y Empleo, Annick ..."),
+# fechas ("5 de octubre de 2026") ni conectores.
 MIN_PALABRAS_MINUSCULA = 5
+
+_NO_CUENTAN = {
+    # artículos, preposiciones y conectores
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "lo", "al", "del", "de", "en", "con", "por", "para",
+    "a", "y", "e", "o", "u", "que", "se", "su", "sus", "es", "son", "fue", "ser", "como", "mas", "pero", "sin",
+    "sobre", "entre", "hasta", "desde", "ante", "tras", "este", "esta", "estos", "estas",
+    # meses y días (parte de una fecha)
+    "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
+    "noviembre", "diciembre", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo",
+}
 # Las citas más cortas que esto (una palabra suelta entre comillas, un título) no se verifican.
 MIN_PALABRAS_CITA = 5
 
@@ -80,7 +91,10 @@ def frases_copiadas(cuerpo: str, fuentes: Sequence[str], n: int = PALABRAS_COPIA
             while j + 1 < len(tk) and cubierto[j + 1]:
                 j += 1
             originales = [m.group(0) for m in palabras[i:j + 1]]
-            minusculas = sum(1 for w in originales if w[:1].islower())
+            minusculas = sum(
+                1 for w in originales
+                if w[:1].islower() and w.isalpha() and _sin_tildes(w.lower()) not in _NO_CUENTAN
+            )
             if minusculas >= MIN_PALABRAS_MINUSCULA:
                 encontrados.append(tramo[palabras[i].start():palabras[j].end()])
             i = j + 1

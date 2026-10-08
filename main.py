@@ -29,6 +29,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 import uvicorn
 
 import config
+import pipeline_guard
 from ai_processor import AIProcessor
 from scraper import NewsScraper
 from services_scraper import ServicesScraper
@@ -511,6 +512,22 @@ def pipeline_ia(
     if not notas:
         logger.warning("No se encontraron notas para los ids=%s", fuentes_ids)
         return {"ok": False, "error": "notas no encontradas"}
+
+    # Solo se procesan notas que siguen en 'raw'. Si el mismo grupo se manda dos veces
+    # (doble clic, pestaña vieja), la segunda vez la líder ya es 'pendiente' y la IA
+    # terminaría reescribiendo su propio texto.
+    notas_raw, no_raw = pipeline_guard.separar_notas_procesables(notas)
+    if not notas_raw:
+        logger.warning("pipeline_ia rechazado: grupo_id=%s ya no está en 'raw' (ids=%s)", grupo_id, fuentes_ids)
+        return {
+            "ok": False,
+            "codigo": pipeline_guard.CODIGO_YA_PROCESADA,
+            "error": pipeline_guard.mensaje_no_procesable(no_raw),
+        }
+    if no_raw:
+        logger.warning("pipeline_ia: se omiten %s nota(s) que ya no están en 'raw': %s",
+                       len(no_raw), [n.get("id") for n in no_raw])
+    notas = notas_raw
 
     # Nota líder = primera de la lista
     lider = notas[0]

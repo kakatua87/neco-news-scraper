@@ -218,7 +218,7 @@ class SupabaseNewsClient:
         try:
             response = (
                 self.client.table("noticias")
-                .select("id, titulo, cuerpo, fuente, imagen_url, seccion, url_original")
+                .select("id, titulo, cuerpo, fuente, imagen_url, seccion, url_original, estado")
                 .in_("id", ids)
                 .execute()
             )

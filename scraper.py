@@ -25,6 +25,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import Browser, Page, sync_playwright
 
 import config
+import url_segura
 
 logger = logging.getLogger("neconews.scraper")
 
@@ -180,6 +181,11 @@ class NewsScraper:
         article/.post/.entry con h1-h3 y links). No tiene la precisión de un
         selector afinado a mano, pero cubre razonablemente el caso común.
         """
+        # Solo URLs públicas: una fuente que apunte a localhost, la red interna o la metadata de la
+        # nube haría que este servidor consulte recursos privados (SSRF). Ver url_segura.py.
+        if not url_segura.url_es_publica(url):
+            logger.warning("Fuente genérica descartada: la URL no es pública o no resuelve (%s: %s)", fuente, url)
+            return []
         logger.info("Scrapeando homepage genérica: %s (%s)", fuente, url)
         return self._scrape_homepage(
             base_url=url,

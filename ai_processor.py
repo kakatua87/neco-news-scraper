@@ -14,12 +14,13 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, Optional, List
 
 from openai import OpenAI, APIError, RateLimitError, APIConnectionError
 
 import config
+import fechas_check
 import redaccion_check
 
 logger = logging.getLogger("neconews.ai")
@@ -37,6 +38,11 @@ _MESES = [
 ]
 
 
+def _hoy_ar() -> date:
+    """Fecha de hoy en Argentina (UTC-3 fijo)."""
+    return datetime.now(timezone(timedelta(hours=-3))).date()
+
+
 def _fecha_hoy_ar() -> str:
     """Fecha de hoy en Argentina (UTC-3 fijo, no tiene horario de verano), p. ej. 'lunes 5 de octubre de 2026'.
     Se le pasa al modelo para que convierta 'este martes' o 'el domingo' en fechas absolutas."""
@@ -48,7 +54,7 @@ def _fecha_hoy_ar() -> str:
 # siguen mejor las instrucciones que están pegadas al final.
 CHECKLIST_FINAL = (
     "\nANTES DE RESPONDER, verificá:\n"
-    "1. Fechas relativas convertidas a fechas absolutas.\n"
+    "1. Fechas relativas convertidas a absolutas, y 'este <día>' solo para la semana en curso.\n"
     "2. Datos de servicio (fechas, horarios, lugares, cómo participar) incluidos.\n"
     "3. Declaraciones: solo las frases más fuertes, literales, entre comillas y con autor; "
     "el resto, con tus palabras.\n"
@@ -105,7 +111,12 @@ REGLAS_COMUNES = (
     "semana') en una fecha absoluta, con día de la semana, número y mes (ej: "
     "'el domingo 11 de octubre'), calculada desde esa fecha. Si el original ya "
     "da la fecha exacta, usá esa. Si no podés determinarla con seguridad, no la "
-    "inventes: describí el momento sin fecha.\n\n"
+    "inventes: describí el momento sin fecha.\n"
+    "- Cuidado con 'este': usalo SOLO si la fecha cae en la misma semana (lunes a "
+    "domingo) que la 'Fecha de hoy'. Si cae en la semana siguiente escribí 'el próximo "
+    "miércoles 14 de octubre', y si es más adelante, 'el miércoles 14 de octubre'. Vale "
+    "también para 'resumen_seo', 'instagram_text', 'instagram_titulo' y 'twitter_text': "
+    "ahí va la fecha absoluta y nunca 'este miércoles' si es de otra semana.\n\n"
 
     "SECCIÓN ('seccion_sugerida'):\n"
     "- Se decide por el TEMA, nunca por la geografía ni por la sección que venga "
@@ -531,6 +542,21 @@ class AIProcessor:
         )
         return True
 
+    _CAMPOS_CON_FECHAS = ("titulo", "cuerpo", "resumen_seo", "instagram_text", "instagram_titulo", "twitter_text")
+
+    @classmethod
+    def _normalizar_fechas(cls, parsed: Dict) -> Dict:
+        """Corrige 'este miércoles 14' cuando esa fecha no es de la semana en curso."""
+        hoy = _hoy_ar()
+        for campo in cls._CAMPOS_CON_FECHAS:
+            valor = parsed.get(campo)
+            if isinstance(valor, str):
+                corregido = fechas_check.corregir_este(valor, hoy)
+                if corregido != valor:
+                    logger.info("Fecha corregida en '%s': %r → %r", campo, valor[:60], corregido[:60])
+                    parsed[campo] = corregido
+        return parsed
+
     _CAMPOS_NOTA = (
         "titulo", "cuerpo", "resumen_seo", "instagram_text", "instagram_titulo",
         "twitter_text", "guion_video", "slug", "seccion_sugerida",
@@ -609,6 +635,7 @@ class AIProcessor:
             raise ValueError(f"IA no devolvió campos requeridos: {', '.join(missing)}")
 
         parsed = self._revisar_redaccion(parsed, [cuerpo], user_prompt, None)
+        parsed = self._normalizar_fechas(parsed)
 
         logger.info("Artículo procesado OK | provider=%s | slug=%s", self.provider, parsed.get("slug"))
         return parsed
@@ -646,6 +673,7 @@ class AIProcessor:
             raise ValueError(f"IA no devolvió campos requeridos: {', '.join(missing)}")
 
         parsed = self._revisar_redaccion(parsed, textos, user_prompt, MULTI_SOURCE_PROMPT)
+        parsed = self._normalizar_fechas(parsed)
 
         logger.info("Multi-source OK | slug=%s | fuentes=%s | titulo=%s",
                     parsed.get("slug"), len(textos), parsed.get("titulo","")[:50])

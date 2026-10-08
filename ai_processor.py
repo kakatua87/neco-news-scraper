@@ -43,6 +43,24 @@ def _hoy_ar() -> date:
     return datetime.now(timezone(timedelta(hours=-3))).date()
 
 
+def _fecha_larga(d: date) -> str:
+    """'lunes 5 de octubre de 2026'."""
+    return f"{_DIAS_SEMANA[d.weekday()]} {d.day} de {_MESES[d.month - 1]} de {d.year}"
+
+
+def _fecha_larga_iso(iso: Optional[str]) -> Optional[str]:
+    """Fecha larga (hora de Argentina) a partir de un timestamp ISO, o None si no se puede interpretar."""
+    if not iso:
+        return None
+    try:
+        momento = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if momento.tzinfo is None:
+        momento = momento.replace(tzinfo=timezone.utc)
+    return _fecha_larga(momento.astimezone(timezone(timedelta(hours=-3))).date())
+
+
 def _fecha_hoy_ar() -> str:
     """Fecha de hoy en Argentina (UTC-3 fijo, no tiene horario de verano), p. ej. 'lunes 5 de octubre de 2026'.
     Se le pasa al modelo para que convierta 'este martes' o 'el domingo' en fechas absolutas."""
@@ -61,6 +79,56 @@ CHECKLIST_FINAL = (
     "4. Ningún dato, descripción ni palabra dentro de una cita que no esté en el material.\n"
     "5. Lead, orden y subtítulos propios: nada de más de 8 palabras seguidas copiadas fuera de comillas.\n"
     "6. Cada protagonista con su cargo o rol completo, cifras exactas y cada hecho atribuido a quien corresponde.\n"
+)
+
+_REGLA_ESTE = (
+    "- Cuidado con 'este': usalo SOLO si la fecha cae en la misma semana (lunes a "
+    "domingo) que la 'Fecha de hoy'. Si cae en la semana siguiente escribí 'el próximo "
+    "miércoles 14 de octubre', y si es más adelante, 'el miércoles 14 de octubre'. Vale "
+    "también para 'resumen_seo', 'instagram_text', 'instagram_titulo' y 'twitter_text': "
+    "ahí va la fecha absoluta y nunca 'este miércoles' si es de otra semana.\n\n"
+)
+
+REGLAS_FECHAS = (
+    "FECHAS:\n"
+    "- El pedido trae 'Fecha de hoy'. Convertí toda referencia relativa del "
+    "original ('hoy', 'este martes', 'el venidero domingo', 'mañana', 'el fin de "
+    "semana') en una fecha absoluta, con día de la semana, número y mes (ej: "
+    "'el domingo 11 de octubre'), calculada desde esa fecha. Si el original ya "
+    "da la fecha exacta, usá esa. Si no podés determinarla con seguridad, no la "
+    "inventes: describí el momento sin fecha.\n"
+) + _REGLA_ESTE
+
+# Para avisos ciudadanos: las referencias relativas del vecino ('ayer', 'anoche') se cuentan desde
+# que LLEGÓ el aviso, que puede ser varios días antes de que se procese.
+REGLAS_FECHAS_AVISO = (
+    "FECHAS:\n"
+    "- El pedido trae 'Fecha en que llegó el aviso' y 'Fecha de hoy'. Las referencias "
+    "relativas del vecino ('ayer', 'anoche', 'esta mañana', 'el sábado') se cuentan "
+    "desde la fecha en que llegó el aviso, NO desde hoy: convertilas en una fecha "
+    "absoluta, con día de la semana, número y mes (ej: 'el sábado 3 de octubre'). Si "
+    "no podés determinarla con seguridad, no la inventes: contá el momento sin fecha "
+    "('según relató el vecino, la noche previa al aviso').\n"
+) + _REGLA_ESTE
+
+REGLAS_SECCION_Y_ESTILO = (
+    "SECCIÓN ('seccion_sugerida'):\n"
+    "- Se decide por el TEMA, nunca por la geografía ni por la sección que venga "
+    "indicada en el pedido (esa es solo una pista del scraper y puede estar mal).\n"
+    "- Deportes: cualquier hecho deportivo, local, nacional o internacional "
+    "(selección, fútbol, básquet, torneos, clubes). Policiales: delitos, "
+    "accidentes, causas judiciales. Política: gobierno, elecciones, gestión, "
+    "legislación. Economía: precios, empleo, comercio, finanzas. Salud, Cultura "
+    "y Sociedad según el tema principal.\n"
+    "- 'Local' es solo para hechos que ocurren en Necochea y la región, o que los "
+    "afectan de forma concreta y mencionada en el original. Una noticia "
+    "nacional o internacional NO es Local por publicarse en un diario de "
+    "Necochea.\n\n"
+
+    "ESTILO — evitá los lugares comunes: 'el astro', 'el crack', 'viejo "
+    "conocido', 'glorioso', 'emotivo', 'multitudinario', 'dejó boquiabiertos', "
+    "'marcó un antes y un después', 'noche histórica' (salvo que sea un dato del "
+    "original). Describí el hecho con datos, no con adjetivos.\n\n"
 )
 
 REGLAS_COMUNES = (
@@ -104,38 +172,7 @@ REGLAS_COMUNES = (
     "resto de lo que dijo contalo con tus palabras. No transcribas declaraciones "
     "enteras. No alteres ni una palabra de lo que va entre comillas; si no podés "
     "citarlo tal cual, contalo sin comillas.\n\n"
-
-    "FECHAS:\n"
-    "- El pedido trae 'Fecha de hoy'. Convertí toda referencia relativa del "
-    "original ('hoy', 'este martes', 'el venidero domingo', 'mañana', 'el fin de "
-    "semana') en una fecha absoluta, con día de la semana, número y mes (ej: "
-    "'el domingo 11 de octubre'), calculada desde esa fecha. Si el original ya "
-    "da la fecha exacta, usá esa. Si no podés determinarla con seguridad, no la "
-    "inventes: describí el momento sin fecha.\n"
-    "- Cuidado con 'este': usalo SOLO si la fecha cae en la misma semana (lunes a "
-    "domingo) que la 'Fecha de hoy'. Si cae en la semana siguiente escribí 'el próximo "
-    "miércoles 14 de octubre', y si es más adelante, 'el miércoles 14 de octubre'. Vale "
-    "también para 'resumen_seo', 'instagram_text', 'instagram_titulo' y 'twitter_text': "
-    "ahí va la fecha absoluta y nunca 'este miércoles' si es de otra semana.\n\n"
-
-    "SECCIÓN ('seccion_sugerida'):\n"
-    "- Se decide por el TEMA, nunca por la geografía ni por la sección que venga "
-    "indicada en el pedido (esa es solo una pista del scraper y puede estar mal).\n"
-    "- Deportes: cualquier hecho deportivo, local, nacional o internacional "
-    "(selección, fútbol, básquet, torneos, clubes). Policiales: delitos, "
-    "accidentes, causas judiciales. Política: gobierno, elecciones, gestión, "
-    "legislación. Economía: precios, empleo, comercio, finanzas. Salud, Cultura "
-    "y Sociedad según el tema principal.\n"
-    "- 'Local' es solo para hechos que ocurren en Necochea y la región, o que los "
-    "afectan de forma concreta y mencionada en el original. Una noticia "
-    "nacional o internacional NO es Local por publicarse en un diario de "
-    "Necochea.\n\n"
-
-    "ESTILO — evitá los lugares comunes: 'el astro', 'el crack', 'viejo "
-    "conocido', 'glorioso', 'emotivo', 'multitudinario', 'dejó boquiabiertos', "
-    "'marcó un antes y un después', 'noche histórica' (salvo que sea un dato del "
-    "original). Describí el hecho con datos, no con adjetivos.\n\n"
-)
+) + REGLAS_FECHAS + REGLAS_SECCION_Y_ESTILO
 
 
 SYSTEM_PROMPT = (
@@ -395,6 +432,7 @@ TIP_SYSTEM_PROMPT = (
     "4. Slug URL-friendly: minúsculas, sin tildes, guiones, máx 60 chars.\n"
     "5. Devolvé SOLO JSON válido, sin markdown ni texto extra.\n\n"
 
+    + REGLAS_FECHAS_AVISO + REGLAS_SECCION_Y_ESTILO +
     "Formato JSON de respuesta:\n"
     "{\n"
     '  "titulo": "Título periodístico preciso (máx 80 caracteres)",\n'
@@ -402,7 +440,7 @@ TIP_SYSTEM_PROMPT = (
     '  "resumen_seo": "150-160 caracteres para Google; mencioná Necochea solo si la nota tiene relación concreta con la ciudad o la región",\n'
     '  "instagram_text": "Cuerpo del caption de Instagram, en 2 a 4 párrafos separados por \\n\\n, terminando con “👉 Nota completa: Link en bio” como párrafo aparte y 3 a 5 hashtags en el último párrafo",\n'
     '  "instagram_titulo": "Título/gancho para Instagram en MAYÚSCULAS, corto (máx 60 caracteres)",\n'
-    '  "twitter_text": "Dato más relevante + #Necochea (máx 280 chars)",\n'
+    '  "twitter_text": "Dato más relevante + hashtag del tema (#Necochea solo si la nota es local; máx 280 chars)",\n'
     '  "guion_video": "Intro 5seg + desarrollo 20seg + cierre 5seg a cámara",\n'
     '  "slug": "titulo-url-friendly-sin-tildes-max-60-chars",\n'
     '  "seccion_sugerida": "Política|Economía|Policiales|Local|Deportes|Sociedad|Salud|Cultura",\n'
@@ -439,6 +477,7 @@ REDACCION_SYSTEM_PROMPT = (
     "4. Slug URL-friendly: minúsculas, sin tildes, guiones, máx 60 chars.\n"
     "5. Devolvé SOLO JSON válido, sin markdown ni texto extra.\n\n"
 
+    + REGLAS_FECHAS +
     "Formato JSON de respuesta:\n"
     "{\n"
     '  "titulo": "Título final (máx 80 caracteres)",\n'
@@ -446,7 +485,7 @@ REDACCION_SYSTEM_PROMPT = (
     '  "resumen_seo": "150-160 caracteres para Google; mencioná Necochea solo si la nota tiene relación concreta con la ciudad o la región",\n'
     '  "instagram_text": "Cuerpo del caption de Instagram, en 2 a 4 párrafos separados por \\n\\n, terminando con “👉 Nota completa: Link en bio” como párrafo aparte y 3 a 5 hashtags en el último párrafo",\n'
     '  "instagram_titulo": "Título/gancho para Instagram en MAYÚSCULAS, corto (máx 60 caracteres)",\n'
-    '  "twitter_text": "Dato más relevante + #Necochea (máx 280 chars)",\n'
+    '  "twitter_text": "Dato más relevante + hashtag del tema (#Necochea solo si la nota es local; máx 280 chars)",\n'
     '  "guion_video": "Intro 5seg + desarrollo 20seg + cierre 5seg a cámara",\n'
     '  "slug": "titulo-url-friendly-sin-tildes-max-60-chars",\n'
     '  "seccion_sugerida": "Política|Economía|Policiales|Local|Deportes|Sociedad|Salud|Cultura",\n'
@@ -685,6 +724,7 @@ class AIProcessor:
         categoria: str,
         contacto_nombre: Optional[str] = None,
         imagenes_urls: Optional[List[str]] = None,
+        fecha_aviso: Optional[str] = None,
     ) -> Dict:
         """
         Redacta una nota periodística a partir de un aviso ciudadano recibido
@@ -694,7 +734,10 @@ class AIProcessor:
         """
         mensaje = mensaje[:4500] + "..." if len(mensaje) > 4500 else mensaje
 
+        fecha_llegada = _fecha_larga_iso(fecha_aviso) or _fecha_hoy_ar()
         user_prompt = (
+            f"Fecha en que llegó el aviso: {fecha_llegada}\n"
+            f"Fecha de hoy: {_fecha_hoy_ar()}\n"
             f"Categoría sugerida: {categoria}\n"
             f"Nombre de contacto: {contacto_nombre or 'no informado'}\n"
             f"Cantidad de imágenes adjuntas: {len(imagenes_urls or [])}\n"
@@ -718,6 +761,8 @@ class AIProcessor:
         if missing:
             raise ValueError(f"IA no devolvió campos requeridos: {', '.join(missing)}")
 
+        parsed = self._normalizar_fechas(parsed)
+
         logger.info("Envío ciudadano procesado OK | provider=%s | slug=%s",
                     self.provider, parsed.get("slug"))
         return parsed
@@ -732,7 +777,8 @@ class AIProcessor:
         cuerpo = cuerpo[:6000] + "..." if len(cuerpo) > 6000 else cuerpo
 
         user_prompt = (
-            f"Sección: {seccion}\n"
+            f"Fecha de hoy: {_fecha_hoy_ar()}\n"
+            f"Sección elegida por el editor: {seccion}\n"
             f"Título original: {titulo}\n"
             f"Cuerpo original:\n{cuerpo}\n"
         )
@@ -748,6 +794,8 @@ class AIProcessor:
         missing = [f for f in required_fields if f not in parsed]
         if missing:
             raise ValueError(f"IA no devolvió campos requeridos: {', '.join(missing)}")
+
+        parsed = self._normalizar_fechas(parsed)
 
         logger.info("Borrador de redacción procesado OK | provider=%s | slug=%s",
                     self.provider, parsed.get("slug"))

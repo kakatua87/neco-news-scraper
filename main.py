@@ -721,7 +721,7 @@ async def procesar_redaccion(request: Request) -> Dict:
 async def procesar_tip(request: Request) -> Dict:
     """
     Redacta una nota a partir de un envío ciudadano (bandeja "Envíos" del panel admin).
-    Body: { mensaje, categoria, contacto_nombre?, imagenes_urls?: [...], provider? }
+    Body: { mensaje, categoria, contacto_nombre?, imagenes_urls?: [...], fecha_aviso?, provider? }
     """
     try:
         body = await request.json()
@@ -732,6 +732,7 @@ async def procesar_tip(request: Request) -> Dict:
     categoria: str = body.get("categoria", "Local")
     contacto_nombre: Optional[str] = body.get("contacto_nombre")
     imagenes_urls: List[str] = body.get("imagenes_urls", [])
+    fecha_aviso: Optional[str] = body.get("fecha_aviso")  # ISO: cuándo llegó el aviso (para 'ayer', 'anoche')
     provider: Optional[str] = (body.get("provider") or "").strip() or None
 
     if not mensaje:
@@ -739,7 +740,7 @@ async def procesar_tip(request: Request) -> Dict:
 
     try:
         ai = AIProcessor(provider=provider)
-        result = ai.process_citizen_tip(mensaje, categoria, contacto_nombre, imagenes_urls)
+        result = ai.process_citizen_tip(mensaje, categoria, contacto_nombre, imagenes_urls, fecha_aviso)
         return {"ok": True, **result}
     except Exception as e:
         logger.exception("Error en /procesar-tip")

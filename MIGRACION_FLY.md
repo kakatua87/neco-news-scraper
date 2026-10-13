@@ -51,7 +51,7 @@ fly.io/pricing antes de decidir.
      OPENROUTER_API_KEY=... \
      TELEGRAM_BOT_TOKEN=... \
      TELEGRAM_CHAT_ID=... \
-     PORTAL_URL=https://neco-news-seven.vercel.app \
+     PORTAL_URL=https://necobeat.com.ar \
      SCRAPER_URL=https://neco-news-scraper.fly.dev \
      INTERNAL_API_SECRET=... \
      PROXY_ENABLED=... \

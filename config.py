@@ -146,7 +146,7 @@ AI_DELAY_SECONDS: float = float(os.getenv("AI_DELAY_SECONDS", "2.0"))
 SCHEDULER_INTERVAL_MINUTES: int = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "30"))
 
 # ─── Portal URL (para links en Telegram) ─────────────────────────
-PORTAL_URL: str = os.getenv("PORTAL_URL", "https://neco-news.vercel.app").strip()
+PORTAL_URL: str = os.getenv("PORTAL_URL", "https://necobeat.com.ar").strip()
 ADMIN_URL: str = f"{PORTAL_URL}/admin"
 
 # URL del propio servidor de scraping (Render). El bot la usa para llamar

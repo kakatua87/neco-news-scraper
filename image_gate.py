@@ -102,18 +102,19 @@ def interpretar(respuesta: Dict) -> Dict:
     }
 
 
-def analizar_imagen(url: str) -> Optional[Dict]:
-    """Devuelve la decisión (ver `interpretar`) o None si no se pudo analizar."""
+def diagnosticar_imagen(url: str) -> Dict:
+    """Como `analizar_imagen`, pero devuelve {"resultado": ..., "error": motivo} para depurar."""
     if not url or not url.startswith("http"):
-        return None
+        return {"resultado": None, "error": "url invalida"}
     keys = config.GEMINI_API_KEYS
     if not keys:
-        logger.warning("Sin GEMINI_API_KEY: no se puede verificar la imagen")
-        return None
+        return {"resultado": None, "error": "sin GEMINI_API_KEY configurada (AI_PROVIDER=%s)" % config.AI_PROVIDER}
     datos = _descargar(url)
-    b64 = _bytes_a_jpeg_b64(datos) if datos else None
+    if not datos:
+        return {"resultado": None, "error": "no se pudo descargar (bloqueo, no es imagen, >5MB o URL no publica)"}
+    b64 = _bytes_a_jpeg_b64(datos)
     if not b64:
-        return None
+        return {"resultado": None, "error": "no se pudo decodificar la imagen"}
 
     mensajes = [{
         "role": "user",
@@ -123,6 +124,7 @@ def analizar_imagen(url: str) -> Optional[Dict]:
         ],
     }]
     base_url = config._PROVIDER_DEFAULTS["gemini"]["base_url"]
+    ultimo_error = "sin respuesta"
     for key in keys[:2]:
         client = OpenAI(api_key=key, base_url=base_url, timeout=25, max_retries=0)
         for modelo in _modelos()[:2]:
@@ -133,10 +135,17 @@ def analizar_imagen(url: str) -> Optional[Dict]:
                 )
                 parsed = json.loads(resp.choices[0].message.content or "{}")
                 if isinstance(parsed, dict) and "marca_agua" in parsed:
-                    return interpretar(parsed)
+                    return {"resultado": interpretar(parsed), "error": None}
+                ultimo_error = "respuesta sin campo marca_agua"
             except Exception as e:
+                ultimo_error = "%s: %s" % (modelo, str(e)[:200])
                 logger.warning("Visión falló (modelo=%s): %s", modelo, str(e)[:150])
-    return None
+    return {"resultado": None, "error": ultimo_error}
+
+
+def analizar_imagen(url: str) -> Optional[Dict]:
+    """Devuelve la decisión (ver `interpretar`) o None si no se pudo analizar."""
+    return diagnosticar_imagen(url)["resultado"]
 
 
 def elegir_imagen_limpia(candidatas: List[str]) -> Dict:

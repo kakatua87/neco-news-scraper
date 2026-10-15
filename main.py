@@ -716,7 +716,7 @@ def verificar_imagen(body: Dict) -> Dict:
     urls = [u for u in (body.get("urls") or []) if isinstance(u, str)][:5]
     if not urls:
         return {"ok": False, "error": "urls es obligatorio"}
-    return {"ok": True, "resultados": [{"url": u, "resultado": image_gate.analizar_imagen(u)} for u in urls]}
+    return {"ok": True, "resultados": [{"url": u, **image_gate.diagnosticar_imagen(u)} for u in urls]}
 
 
 @app.post("/procesar-redaccion", dependencies=[Depends(require_internal_secret)])

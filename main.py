@@ -705,6 +705,23 @@ async def edicion_matutina(dry_run: bool = False) -> Dict:
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/verificar-imagen", dependencies=[Depends(require_internal_secret)])
+async def verificar_imagen(request: Request) -> Dict:
+    """
+    Detecta marca de agua / logo de medio en una imagen con visión.
+    Body: { urls: [url, ...] } (máx. 5). Devuelve el análisis de cada una.
+    """
+    import image_gate
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "error": "json inválido"}
+    urls = [u for u in (body.get("urls") or []) if isinstance(u, str)][:5]
+    if not urls:
+        return {"ok": False, "error": "urls es obligatorio"}
+    return {"ok": True, "resultados": [{"url": u, "resultado": image_gate.analizar_imagen(u)} for u in urls]}
+
+
 @app.post("/procesar-redaccion", dependencies=[Depends(require_internal_secret)])
 async def procesar_redaccion(request: Request) -> Dict:
     """

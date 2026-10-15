@@ -137,6 +137,34 @@ def seleccionar(cands: List[Dict], cfg: Dict) -> List[Dict]:
     return elegidos
 
 
+def verificar_imagen_nota(client, noticia_id: str, g: Dict) -> str:
+    """
+    Image gate: revisa la foto que quedó en la nota y, si tiene marca/logo, prueba
+    las de las otras fuentes del grupo. Devuelve el motivo para `auto_motivo`.
+    """
+    import image_gate
+    from image_handler import ImageHandler
+
+    fila = client.client.table("noticias").select("imagen_url").eq("id", noticia_id).single().execute().data or {}
+    actual = fila.get("imagen_url")
+    originales = [n.get("imagen_url") for n in g["notas"] if n.get("imagen_url")]
+    elegida = image_gate.elegir_imagen_limpia([actual] + originales)
+
+    if elegida["url"] is None:
+        analizadas = [d for d in elegida["detalle"] if d["resultado"]]
+        if not analizadas:
+            return "imagen: no se pudo verificar"
+        r = analizadas[0]["resultado"]
+        return "imagen: con marca/logo (%s)" % (r.get("nombre_medio") or r.get("motivo") or "sin detalle")
+    if elegida["url"] == actual:
+        return "imagen: limpia"
+    nueva = ImageHandler(client).upload_image(elegida["url"], noticia_id)
+    if not nueva:
+        return "imagen: alternativa limpia pero no se pudo subir"
+    client.update_imagen(noticia_id, nueva)
+    return "imagen: reemplazada por alternativa limpia"
+
+
 def _log(client, modo: str, g: Dict, resultado: str, motivo: str = "", noticia_id: Optional[str] = None) -> None:
     try:
         client.client.table("edicion_log").insert({
@@ -186,10 +214,15 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
             sobrantes = [i for i in ids if i != r["noticia_id"]]
             if sobrantes:
                 client.client.table("noticias").update({"estado": "descartada"})                     .in_("id", sobrantes).eq("estado", "raw").execute()
+            try:
+                motivo_img = verificar_imagen_nota(client, r["noticia_id"], g)
+            except Exception:
+                logger.exception("Image gate falló para %s", r["noticia_id"])
+                motivo_img = "imagen: no se pudo verificar"
             client.client.table("noticias").update(
-                {"score": g["score"], "auto_motivo": "edicion_matutina: pendiente de revision"}
+                {"score": g["score"], "auto_motivo": f"pendiente de revision | {motivo_img}"}
             ).eq("id", r["noticia_id"]).execute()
-            _log(client, modo, g, "procesada", noticia_id=r["noticia_id"])
+            _log(client, modo, g, "procesada", motivo=motivo_img, noticia_id=r["noticia_id"])
         else:
             resumen["errores"] += 1
             _log(client, modo, g, "error", r.get("error", ""))

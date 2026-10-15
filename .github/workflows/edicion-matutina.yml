@@ -7,6 +7,11 @@ on:
   schedule:
     - cron: "0 10 * * *"   # ~07:00 ART
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Solo rankear y loguear, sin IA"
+        type: boolean
+        default: false
 
 jobs:
   run:
@@ -20,4 +25,4 @@ jobs:
         run: |
           curl -fsS --max-time 900 -X POST \
             -H "Authorization: Bearer ${{ secrets.INTERNAL_API_SECRET }}" \
-            "${{ secrets.SCRAPER_URL }}/edicion-matutina"
+            "${{ secrets.SCRAPER_URL }}/edicion-matutina?dry_run=${{ inputs.dry_run || false }}"

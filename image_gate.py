@@ -107,7 +107,7 @@ def diagnosticar_imagen(url: str) -> Dict:
     """Como `analizar_imagen`, pero devuelve {"resultado": ..., "error": motivo} para depurar."""
     if not url or not url.startswith("http"):
         return {"resultado": None, "error": "url invalida"}
-    keys = config.GEMINI_API_KEYS
+    keys = config.gemini_keys_ordenadas()
     if not keys:
         return {"resultado": None, "error": "sin GEMINI_API_KEY configurada (AI_PROVIDER=%s)" % config.AI_PROVIDER}
     datos = _descargar(url)
@@ -126,7 +126,8 @@ def diagnosticar_imagen(url: str) -> Dict:
     }]
     base_url = config._PROVIDER_DEFAULTS["gemini"]["base_url"]
     ultimo_error = "sin respuesta"
-    for key in keys[:2]:
+    for key in keys:
+        key_agotada = False
         client = OpenAI(api_key=key, base_url=base_url, timeout=25, max_retries=0)
         for modelo in _modelos():
             for intento in range(2):  # 503 "high demand" suele ser transitorio
@@ -143,10 +144,16 @@ def diagnosticar_imagen(url: str) -> Dict:
                 except Exception as e:
                     ultimo_error = "%s: %s" % (modelo, str(e)[:200])
                     logger.warning("Visión falló (modelo=%s, intento=%s): %s", modelo, intento + 1, str(e)[:150])
-                    if "503" in str(e) or "429" in str(e):
+                    if "429" in str(e):
+                        config.gemini_key_agotada(key)
+                        key_agotada = True
+                        break
+                    if "503" in str(e):
                         time.sleep(4)
                         continue
                     break
+            if key_agotada:
+                break
     return {"resultado": None, "error": ultimo_error}
 
 

@@ -6,6 +6,7 @@ Todas las variables de entorno se validan aquí al iniciar.
 import logging
 import os
 import sys
+import time
 
 from dotenv import load_dotenv
 
@@ -93,14 +94,50 @@ PROVIDER_API_KEYS: dict = {p: _api_key_for(p) for p in _PROVIDER_DEFAULTS}
 # sin cuota (429 / RESOURCE_EXHAUSTED), AIProcessor prueba con la siguiente
 # antes de rendirse. GEMINI_API_KEY ya la toma PROVIDER_API_KEYS de arriba;
 # acá juntamos las 3 en orden para el mecanismo de fallback.
-GEMINI_API_KEYS: list = [
-    k for k in (
-        PROVIDER_API_KEYS.get("gemini", ""),
-        os.getenv("GEMINI_API_KEY_2", "").strip(),
-        os.getenv("GEMINI_API_KEY_3", "").strip(),
-    )
-    if k
-]
+def _cargar_gemini_keys() -> list:
+    """
+    Todas las API keys de Gemini, sin repetir y en orden:
+    GEMINI_API_KEY, GEMINI_API_KEY_2 ... GEMINI_API_KEY_20, y/o GEMINI_API_KEYS con varias
+    separadas por coma (la forma más cómoda para cargar muchas).
+    """
+    candidatas = [PROVIDER_API_KEYS.get("gemini", "")]
+    candidatas += [os.getenv(f"GEMINI_API_KEY_{i}", "").strip() for i in range(2, 21)]
+    candidatas += [k.strip() for k in os.getenv("GEMINI_API_KEYS", "").split(",")]
+    vistas, out = set(), []
+    for k in candidatas:
+        if k and k not in vistas:
+            vistas.add(k)
+            out.append(k)
+    return out
+
+
+GEMINI_API_KEYS: list = _cargar_gemini_keys()
+
+# Cada AIProcessor/gate es una instancia nueva: sin memoria compartida, todas arrancarían por
+# la key #1 ya agotada y gastarían una llamada fallida por nota antes de rotar. Se recuerda cuál
+# fue la última que respondió y se vuelve a la #1 pasada media hora (la cuota por minuto se
+# repone sola; la diaria, al día siguiente).
+_gemini_estado = {"idx": 0, "ts": 0.0}
+_VIGENCIA_ROTACION_S = 1800
+
+
+def gemini_keys_ordenadas() -> list:
+    """Keys de Gemini rotadas para empezar por la que todavía tiene cuota."""
+    keys = GEMINI_API_KEYS
+    if len(keys) < 2:
+        return list(keys)
+    idx = _gemini_estado["idx"] % len(keys)
+    if time.time() - _gemini_estado["ts"] > _VIGENCIA_ROTACION_S:
+        idx = 0
+    return keys[idx:] + keys[:idx]
+
+
+def gemini_key_agotada(key: str) -> None:
+    """Marca `key` como sin cuota: las próximas instancias empiezan por la siguiente."""
+    keys = GEMINI_API_KEYS
+    if key in keys and len(keys) > 1:
+        _gemini_estado["idx"] = (keys.index(key) + 1) % len(keys)
+        _gemini_estado["ts"] = time.time()
 
 
 def get_provider_config(provider: str) -> "dict | None":

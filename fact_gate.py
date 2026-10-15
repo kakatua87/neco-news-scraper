@@ -146,19 +146,22 @@ _PROMPT = (
 
 
 def _llm_json(mensajes: List[Dict]) -> Optional[Dict]:
-    keys = config.GEMINI_API_KEYS
+    keys = config.gemini_keys_ordenadas()
     if not keys:
         return None
     base = config.AI_MODEL if config.AI_PROVIDER == "gemini" else config._PROVIDER_DEFAULTS["gemini"]["model"]
     modelos = [base] + [m for m in config.AI_FALLBACK_MODELS if m != base]
     base_url = config._PROVIDER_DEFAULTS["gemini"]["base_url"]
-    for key in keys[:2]:
+    for key in keys:
         client = OpenAI(api_key=key, base_url=base_url, timeout=40, max_retries=0)
+        key_agotada = False
         for modelo in modelos:
+            if key_agotada:
+                break
             for _ in range(2):
                 try:
                     r = client.chat.completions.create(
-                        model=modelo, messages=mensajes, temperature=0, max_tokens=900,
+                        model=modelo, messages=mensajes, temperature=0, max_tokens=4096,
                         response_format={"type": "json_object"},
                     )
                     parsed = json.loads(r.choices[0].message.content or "{}")
@@ -167,7 +170,11 @@ def _llm_json(mensajes: List[Dict]) -> Optional[Dict]:
                     break
                 except Exception as e:
                     logger.warning("Verificador falló (%s): %s", modelo, str(e)[:150])
-                    if "503" in str(e) or "429" in str(e):
+                    if "429" in str(e):
+                        config.gemini_key_agotada(key)
+                        key_agotada = True
+                        break
+                    if "503" in str(e):
                         time.sleep(4)
                         continue
                     break

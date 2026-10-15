@@ -531,7 +531,7 @@ class AIProcessor:
         # GEMINI_API_KEY_2, GEMINI_API_KEY_3), quedan disponibles para rotar
         # sola cuando una se queda sin cuota — ver _call_with_retry().
         self._fallback_keys: List[str] = (
-            list(config.GEMINI_API_KEYS) if self.provider == "gemini" and len(config.GEMINI_API_KEYS) > 1 else []
+            config.gemini_keys_ordenadas() if self.provider == "gemini" and len(config.GEMINI_API_KEYS) > 1 else []
         )
         self._key_index = 0
         if self._fallback_keys:
@@ -572,6 +572,7 @@ class AIProcessor:
         Devuelve False si ya no quedan más keys para probar."""
         if self._key_index + 1 >= len(self._fallback_keys):
             return False
+        config.gemini_key_agotada(self._fallback_keys[self._key_index])
         self._key_index += 1
         nueva_key = self._fallback_keys[self._key_index]
         self.client = OpenAI(api_key=nueva_key, base_url=self.base_url)

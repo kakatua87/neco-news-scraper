@@ -291,7 +291,9 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         r = {"ok": False, "error": "sin intentar"}
         for _intento in range(2):  # la IA a veces devuelve el JSON incompleto: un reintento
             try:
-                r = procesar(g["grupo_id"], ids, None, g["seccion"])
+                # seccion="": no se pisa la sugerencia de la IA con la etiqueta del scraper, que
+                # manda "Local" para casi todo (deportes nacionales, economía, política).
+                r = procesar(g["grupo_id"], ids, None, "")
             except Exception as e:  # una nota no debe frenar la edición
                 logger.exception("Error procesando grupo %s", g["grupo_id"])
                 r = {"ok": False, "error": str(e)[:200]}

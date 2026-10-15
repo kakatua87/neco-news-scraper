@@ -58,16 +58,22 @@ def _bytes_a_jpeg_b64(datos: bytes) -> Optional[str]:
 
 
 def _descargar(url: str) -> Optional[bytes]:
-    if not url_es_publica(url):  # anti-SSRF: el endpoint /verificar-imagen recibe URLs externas
-        logger.warning("URL no pública rechazada: %s", url[:100])
-        return None
+    """Descarga siguiendo hasta 3 redirecciones, validando cada salto contra SSRF."""
     try:
-        r = requests.get(url, timeout=10, headers={"User-Agent": _UA}, allow_redirects=False)
-        if r.status_code != 200 or not r.headers.get("Content-Type", "").startswith("image/"):
-            return None
-        if len(r.content) > _MAX_BYTES:
-            return None
-        return r.content
+        for _ in range(4):
+            if not url_es_publica(url):
+                logger.warning("URL no pública rechazada: %s", url[:100])
+                return None
+            r = requests.get(url, timeout=10, headers={"User-Agent": _UA}, allow_redirects=False)
+            if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
+                url = requests.compat.urljoin(url, r.headers["Location"])
+                continue
+            if r.status_code != 200 or not r.headers.get("Content-Type", "").startswith("image/"):
+                return None
+            if len(r.content) > _MAX_BYTES:
+                return None
+            return r.content
+        return None
     except Exception:
         logger.warning("No se pudo descargar la imagen %s", url[:100])
         return None

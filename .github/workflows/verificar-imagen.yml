@@ -1,0 +1,27 @@
+name: Verificar imagen
+
+# Prueba manual del image gate: manda hasta 5 URLs (separadas por espacio) a
+# /verificar-imagen y muestra el análisis de visión en el log.
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "URLs de imagen separadas por espacio (máx. 5)"
+        required: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Analizar
+        env:
+          URLS: ${{ inputs.urls }}
+        run: |
+          curl -fsS --retry 6 --retry-delay 15 --max-time 120 "${{ secrets.SCRAPER_URL }}/health" >/dev/null
+          BODY=$(python3 -c "import json,os;print(json.dumps({'urls':os.environ['URLS'].split()}))")
+          curl -fsS --max-time 300 -X POST \
+            -H "Authorization: Bearer ${{ secrets.INTERNAL_API_SECRET }}" \
+            -H "Content-Type: application/json" -d "$BODY" \
+            "${{ secrets.SCRAPER_URL }}/verificar-imagen" | python3 -m json.tool

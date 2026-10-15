@@ -45,6 +45,13 @@ _PROMPT = (
 )
 
 
+_EXTRA_BORDES = (
+    "\nREVISIÓN ESTRICTA: mirá con especial atención los bordes y franjas de la imagen (inferior, superior, "
+    "esquinas): logos chicos, isotipos, nombres de medios, sellos y pies de foto con marca. Un logo pequeño "
+    "en una franja o esquina cuenta como logo_medio=true."
+)
+
+
 def _bytes_a_jpeg_b64(datos: bytes) -> Optional[str]:
     try:
         with Image.open(io.BytesIO(datos)) as img:
@@ -103,7 +110,7 @@ def interpretar(respuesta: Dict) -> Dict:
     }
 
 
-def diagnosticar_imagen(url: str) -> Dict:
+def diagnosticar_imagen(url: str, revision_bordes: bool = False) -> Dict:
     """Como `analizar_imagen`, pero devuelve {"resultado": ..., "error": motivo} para depurar."""
     if not url or not url.startswith("http"):
         return {"resultado": None, "error": "url invalida"}
@@ -120,7 +127,7 @@ def diagnosticar_imagen(url: str) -> Dict:
     mensajes = [{
         "role": "user",
         "content": [
-            {"type": "text", "text": _PROMPT},
+            {"type": "text", "text": _PROMPT + (_EXTRA_BORDES if revision_bordes else "")},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
         ],
     }]
@@ -157,14 +164,16 @@ def diagnosticar_imagen(url: str) -> Dict:
     return {"resultado": None, "error": ultimo_error}
 
 
-def analizar_imagen(url: str) -> Optional[Dict]:
+def analizar_imagen(url: str, revision_bordes: bool = False) -> Optional[Dict]:
     """Devuelve la decisión (ver `interpretar`) o None si no se pudo analizar."""
-    return diagnosticar_imagen(url)["resultado"]
+    return diagnosticar_imagen(url, revision_bordes)["resultado"]
 
 
-def elegir_imagen_limpia(candidatas: List[str]) -> Dict:
+def elegir_imagen_limpia(candidatas: List[str], doble_revision: bool = False) -> Dict:
     """
     Prueba las candidatas en orden y devuelve la primera limpia.
+    Con `doble_revision` cada candidata debe pasar dos análisis independientes: el normal y uno
+    enfocado en bordes y franjas (donde suelen estar los logos chicos); basta que uno la marque.
     {"url": str|None, "indice": int|None, "detalle": [..por candidata..]}
     """
     vistas = set()
@@ -174,6 +183,12 @@ def elegir_imagen_limpia(candidatas: List[str]) -> Dict:
             continue
         vistas.add(url)
         res = analizar_imagen(url)
+        if doble_revision and res and res["limpia"]:
+            res2 = analizar_imagen(url, revision_bordes=True)
+            if res2 and not res2["limpia"]:
+                res = res2
+            elif res2 is None:
+                res = None  # sin segunda opinión no se da por limpia
         detalle.append({"url": url, "resultado": res})
         if res and res["limpia"]:
             return {"url": url, "indice": i, "detalle": detalle}

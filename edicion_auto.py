@@ -146,10 +146,30 @@ def seleccionar(cands: List[Dict], cfg: Dict, limite: Optional[int] = None) -> L
     return elegidos
 
 
+def _dominio(url: Optional[str]) -> str:
+    from urllib.parse import urlparse
+
+    try:
+        return urlparse(url or "").netloc.lower().removeprefix("www.")
+    except Exception:
+        return ""
+
+
+def _con_logo_del_medio(url: Optional[str]) -> bool:
+    """True si la imagen viene de un dominio cuyas fotos llevan su logo estampado."""
+    import config
+
+    d = _dominio(url)
+    return bool(d) and any(d == x or d.endswith("." + x) for x in config.IMAGEN_DOMINIOS_CON_LOGO)
+
+
 def verificar_imagen_nota(client, noticia_id: str, g: Dict) -> Tuple[bool, str]:
     """
-    Image gate: revisa la foto que quedó en la nota y, si tiene marca/logo, prueba
-    las de las otras fuentes del grupo. Devuelve (apta, motivo para `auto_motivo`).
+    Image gate: devuelve (apta, motivo para `auto_motivo`).
+    - Las fotos de dominios que estampan su logo (TSN Necochea) no se usan si otra fuente del
+      grupo trae foto; si es la única, la nota queda para revisión.
+    - Si el grupo incluye alguna de esas fuentes, la imagen elegida pasa por doble revisión.
+    - Una foto con marca/logo/texto se reemplaza por la de otra fuente que esté limpia.
     """
     import image_gate
     from image_handler import ImageHandler
@@ -157,7 +177,21 @@ def verificar_imagen_nota(client, noticia_id: str, g: Dict) -> Tuple[bool, str]:
     fila = client.client.table("noticias").select("imagen_url").eq("id", noticia_id).single().execute().data or {}
     actual = fila.get("imagen_url")
     originales = [n.get("imagen_url") for n in g["notas"] if n.get("imagen_url")]
-    elegida = image_gate.elegir_imagen_limpia([actual] + originales)
+    lider = next((n for n in g["notas"] if n.get("id") == noticia_id), None)
+    original_lider = (lider or {}).get("imagen_url")
+
+    actual_con_logo = _con_logo_del_medio(original_lider)
+    alternativas = [u for u in originales if not _con_logo_del_medio(u)]
+    candidatas = ([] if actual_con_logo else [actual]) + alternativas
+    doble = any(_con_logo_del_medio(u) for u in originales)
+
+    if not [c for c in candidatas if c]:
+        if actual_con_logo or any(_con_logo_del_medio(u) for u in originales):
+            dom = _dominio(original_lider or (originales[0] if originales else ""))
+            return False, f"imagen: la única foto disponible es de {dom} y lleva su logo"
+        return False, "imagen: sin foto disponible"
+
+    elegida = image_gate.elegir_imagen_limpia(candidatas, doble_revision=doble)
 
     if elegida["url"] is None:
         analizadas = [d for d in elegida["detalle"] if d["resultado"]]

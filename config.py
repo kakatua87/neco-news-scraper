@@ -170,6 +170,15 @@ def list_available_providers() -> list:
             })
     return result
 
+# Dominios cuyas fotos llevan el logo del medio estampado (p. ej. la franja blanca inferior de
+# TSN Necochea). Esas fotos no se usan en la edición automática si hay otra fuente con foto, y
+# cuando el grupo las incluye la imagen elegida se verifica dos veces.
+IMAGEN_DOMINIOS_CON_LOGO: list = [
+    d.strip().lower().removeprefix("www.")
+    for d in os.getenv("IMAGEN_DOMINIOS_CON_LOGO", "tsnnecochea.com.ar").split(",")
+    if d.strip()
+]
+
 # ─── Telegram ────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()

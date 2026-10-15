@@ -31,8 +31,8 @@ _NOMBRES_OK = {
     "martes", "miercoles", "jueves", "viernes", "sabado", "domingo", "ruta", "calle", "avenida",
     "municipalidad", "municipio", "policia", "segun", "ademas", "tambien", "ante", "sin", "tras",
 }
-# Temas donde se exige corroboración de 2+ fuentes y donde nunca se automatiza con ciertas palabras.
-SECCIONES_DOBLE_FUENTE = {"Policiales", "Política", "Politica"}
+# La cantidad de fuentes NO bloquea la automatización: una nota de fuente única se publica igual
+# si el verificador la respalda (decisión editorial).
 PALABRAS_SENSIBLES = (
     "menor de edad", "menores", "adolescente", "niña", "niño", "abuso", "violación", "violacion",
     "suicidio", "femicidio", "homicidio", "imputado", "detenido", "sospechoso", "acusado",
@@ -149,8 +149,6 @@ def evaluar_nota(titulo: str, cuerpo: str, fuentes: List[str], seccion: str = ""
     sens = _hay_sensible(titulo, cuerpo, *fuentes)
     if sens:
         motivos.append(f"tema sensible ('{sens}'): revisión humana")
-    if seccion in SECCIONES_DOBLE_FUENTE and n_fuentes < 2:
-        motivos.append(f"{seccion} con una sola fuente")
 
     det = chequeo_determinista(titulo, cuerpo, fuentes)
     if det["cifras_no_respaldadas"]:

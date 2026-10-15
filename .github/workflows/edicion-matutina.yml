@@ -1,0 +1,23 @@
+name: Edición matutina
+
+# Despierta el servicio de Render (el free tier se duerme) y dispara el ranking
+# + procesado con IA del top de la mañana. Fase 0: deja todo en 'pendiente'.
+
+on:
+  schedule:
+    - cron: "0 10 * * *"   # ~07:00 ART
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Warm-up
+        run: curl -fsS --retry 6 --retry-delay 15 --max-time 120 "${{ secrets.SCRAPER_URL }}/health"
+
+      - name: Ejecutar edición
+        run: |
+          curl -fsS --max-time 900 -X POST \
+            -H "Authorization: Bearer ${{ secrets.INTERNAL_API_SECRET }}" \
+            "${{ secrets.SCRAPER_URL }}/edicion-matutina"

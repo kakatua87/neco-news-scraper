@@ -689,6 +689,22 @@ async def procesar_grupo(request: Request) -> Dict:
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/edicion-matutina", dependencies=[Depends(require_internal_secret)])
+async def edicion_matutina(dry_run: bool = False) -> Dict:
+    """
+    Edición matutina (Fase 0): rankea los grupos raw recientes, procesa el top N
+    con IA y los deja en 'pendiente' con su score. No publica.
+    ?dry_run=true solo rankea y loguea.
+    """
+    import edicion_auto
+    try:
+        client = SupabaseNewsClient()
+        return edicion_auto.ejecutar_edicion(client, pipeline_ia, dry_run=dry_run)
+    except Exception as e:
+        logger.exception("Error en /edicion-matutina")
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/procesar-redaccion", dependencies=[Depends(require_internal_secret)])
 async def procesar_redaccion(request: Request) -> Dict:
     """

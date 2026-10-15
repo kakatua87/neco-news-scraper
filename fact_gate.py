@@ -16,6 +16,7 @@ import logging
 import re
 import time
 import unicodedata
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from openai import OpenAI
@@ -43,6 +44,43 @@ MAX_FUENTE_CHARS = 3500
 def _norm(texto: str) -> str:
     t = unicodedata.normalize("NFKD", (texto or "").lower())
     return "".join(c for c in t if not unicodedata.combining(c))
+
+
+_MESES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+          "septiembre", "octubre", "noviembre", "diciembre")
+_DIAS = ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")
+
+
+def _hoy_ar() -> datetime:
+    return datetime.now(timezone.utc) - timedelta(hours=3)
+
+
+def _fecha_hoy_texto() -> str:
+    h = _hoy_ar()
+    return f"{_DIAS[h.weekday()]} {h.day} de {_MESES[h.month - 1]} de {h.year}"
+
+
+def _quitar_fechas_cercanas(texto: str, ventana_dias: int = 7) -> str:
+    """
+    La IA convierte "este miércoles" en "miércoles 14 de octubre de 2026" (regla del prompt
+    de redacción): esos números no están en la fuente pero son correctos. Se descartan solo
+    las fechas dentro de ±`ventana_dias` de hoy; una fecha lejana inventada sigue contando.
+    """
+    hoy = _hoy_ar()
+    validas = set()
+    for delta in range(-ventana_dias, ventana_dias + 1):
+        d = hoy + timedelta(days=delta)
+        validas.add((d.day, _MESES[d.month - 1], d.year))
+
+    def _reemplazo(m: "re.Match") -> str:
+        dia, mes, anio = int(m.group(1)), m.group(2), m.group(3)
+        anios = {a for (dd, mm, a) in validas if dd == dia and mm == mes}
+        if anio is None:
+            return " " if anios else m.group(0)
+        return " " if int(anio) in anios else m.group(0)
+
+    patron = r"(\d{1,2}) de (" + "|".join(_MESES) + r")(?: de (\d{4}))?"
+    return re.sub(patron, _reemplazo, _norm(texto))
 
 
 def _numeros(texto: str) -> set:
@@ -73,8 +111,12 @@ def chequeo_determinista(titulo: str, cuerpo: str, fuentes: List[str]) -> Dict:
     base = "\n".join(fuentes)
     base_norm = _norm(base)
     nums_fuente = _numeros(base)
-    cifras = sorted(n for n in _numeros(nota) if n not in nums_fuente)
-    nombres = sorted(n for n in _nombres(nota) if n not in base_norm)
+    cifras = sorted(n for n in _numeros(_quitar_fechas_cercanas(nota)) if n not in nums_fuente)
+    # Se compara por raíz de 5 letras: "instrucción"/"instrucciones", "unidad"/"unidades".
+    raices_fuente = {w[:5] for w in re.findall(r"[a-z0-9]+", base_norm)}
+    nombres = sorted(
+        n for n in _nombres(nota) if n not in base_norm and n[:5] not in raices_fuente
+    )
     return {"cifras_no_respaldadas": cifras, "nombres_no_respaldados": nombres}
 
 
@@ -94,6 +136,9 @@ _PROMPT = (
     "agregar o cambiar datos no.\n"
     'Respondé SOLO JSON: {"ok": bool, "hallazgos": [{"tipo": "cifra|nombre|atribucion|hecho|contradiccion", '
     '"texto": "fragmento de la nota", "detalle": "por qué no está respaldado"}]}\n'
+    "IMPORTANTE: la redacción convierte fechas relativas ('este miércoles', 'ayer', 'mañana') en fechas "
+    "absolutas usando la fecha de hoy; eso es correcto y NO es un hallazgo mientras sea coherente con la "
+    "fecha de hoy indicada abajo. Tampoco es hallazgo que la nota omita datos de la fuente.\n"
     "ok=true solo si hallazgos está vacío. No inventes hallazgos."
 )
 
@@ -131,7 +176,7 @@ def verificar_con_llm(titulo: str, cuerpo: str, fuentes: List[str]) -> Optional[
     bloques = "\n\n".join(
         f"--- FUENTE {i + 1} ---\n{f[:MAX_FUENTE_CHARS]}" for i, f in enumerate(fuentes)
     )
-    contenido = f"{_PROMPT}\n\n=== NOTA ===\nTítulo: {titulo}\n\n{cuerpo}\n\n=== FUENTES ===\n{bloques}"
+    contenido = f"{_PROMPT}\n\nFecha de hoy: {_fecha_hoy_texto()}\n\n=== NOTA ===\nTítulo: {titulo}\n\n{cuerpo}\n\n=== FUENTES ===\n{bloques}"
     return _llm_json([{"role": "user", "content": contenido}])
 
 
@@ -152,7 +197,7 @@ def evaluar_nota(titulo: str, cuerpo: str, fuentes: List[str], seccion: str = ""
     det = chequeo_determinista(titulo, cuerpo, fuentes)
     if det["cifras_no_respaldadas"]:
         motivos.append("cifras sin respaldo: " + ", ".join(det["cifras_no_respaldadas"][:5]))
-    if len(det["nombres_no_respaldados"]) >= 2:
+    if len(det["nombres_no_respaldados"]) >= 3:
         motivos.append("nombres sin respaldo: " + ", ".join(det["nombres_no_respaldados"][:5]))
 
     llm = verificar_con_llm(titulo, cuerpo, fuentes)

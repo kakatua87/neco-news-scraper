@@ -689,20 +689,43 @@ async def procesar_grupo(request: Request) -> Dict:
         return {"ok": False, "error": str(e)}
 
 
+import threading as _threading
+
+_EDICION_LOCK = _threading.Lock()
+
+
 @app.post("/edicion-matutina", dependencies=[Depends(require_internal_secret)])
-async def edicion_matutina(dry_run: bool = False) -> Dict:
+def edicion_matutina(dry_run: bool = False) -> Dict:
     """
-    Edición matutina (Fase 0): rankea los grupos raw recientes, procesa el top N
-    con IA y los deja en 'pendiente' con su score. No publica.
-    ?dry_run=true solo rankea y loguea.
+    Edición matutina: rankea los grupos raw recientes, procesa el top N con IA, pasa los
+    gates y (si `edicion_auto_publicar`) publica. El resultado queda en `edicion_log`.
+    ?dry_run=true solo rankea y loguea (síncrono). Sin dry_run corre en segundo plano:
+    tarda varios minutos y no entra en el timeout de una request.
     """
+    import threading
     import edicion_auto
     try:
         client = SupabaseNewsClient()
-        return edicion_auto.ejecutar_edicion(client, pipeline_ia, dry_run=dry_run)
+        if dry_run:
+            return edicion_auto.ejecutar_edicion(client, pipeline_ia, dry_run=True)
     except Exception as e:
         logger.exception("Error en /edicion-matutina")
         return {"ok": False, "error": str(e)}
+
+    if not _EDICION_LOCK.acquire(blocking=False):
+        return {"ok": False, "error": "ya hay una edición en curso"}
+
+    def _correr() -> None:
+        try:
+            resumen = edicion_auto.ejecutar_edicion(SupabaseNewsClient(), pipeline_ia)
+            logger.info("Edición matutina finalizada: %s", {k: v for k, v in resumen.items() if k != "items"})
+        except Exception:
+            logger.exception("Error en la edición matutina")
+        finally:
+            _EDICION_LOCK.release()
+
+    threading.Thread(target=_correr, name="edicion-matutina", daemon=True).start()
+    return {"ok": True, "iniciada": True}
 
 
 @app.post("/verificar-imagen", dependencies=[Depends(require_internal_secret)])

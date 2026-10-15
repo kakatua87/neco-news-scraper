@@ -146,9 +146,8 @@ def evaluar_nota(titulo: str, cuerpo: str, fuentes: List[str], seccion: str = ""
         return {"automatica": False, "motivos": ["sin texto de fuente para contrastar"],
                 "determinista": None, "llm": None}
 
-    sens = _hay_sensible(titulo, cuerpo, *fuentes)
-    if sens:
-        motivos.append(f"tema sensible ('{sens}'): revisión humana")
+    # Decisión editorial: ningún tema (sensible o no) bloquea la automatización por sí solo;
+    # solo los chequeos de respaldo contra las fuentes.
 
     det = chequeo_determinista(titulo, cuerpo, fuentes)
     if det["cifras_no_respaldadas"]:

@@ -13,7 +13,7 @@ import re
 import unicodedata
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("neconews.edicion")
 
@@ -24,7 +24,7 @@ PESOS_DEFAULT = {
     "frescura": 2.0,      # máx. puntos por nota reciente
     "imagen": 0.5,        # tiene foto
     "secciones": {"Policiales": 1.5, "Política": 1.2, "Local": 1.5, "Deportes": 0.8},
-    "max_por_seccion": 3,
+    "max_por_seccion": 2,
 }
 
 
@@ -111,11 +111,14 @@ def puntuar(grupo: Dict, pesos: Dict, ahora: Optional[datetime] = None) -> float
     return round(score, 3)
 
 
-def seleccionar(cands: List[Dict], cfg: Dict) -> List[Dict]:
-    """Rankea y devuelve el top N respetando exclusiones y tope por sección."""
+def seleccionar(cands: List[Dict], cfg: Dict, limite: Optional[int] = None) -> List[Dict]:
+    """
+    Rankea y devuelve hasta `limite` grupos priorizando variedad de secciones:
+    primero respeta el tope por sección y, si no alcanza, completa con lo que sobra.
+    """
     pesos = {**PESOS_DEFAULT, **(cfg.get("edicion_pesos") or {})}
     excluidas = set(cfg.get("edicion_secciones_excluidas") or SECCIONES_EXCLUIDAS_DEFAULT)
-    maximo = int(cfg.get("edicion_max") or 8)
+    maximo = limite if limite is not None else int(cfg.get("edicion_max") or 8)
 
     for g in cands:
         g["seccion"] = g["notas"][0].get("seccion") or "Local"
@@ -134,13 +137,19 @@ def seleccionar(cands: List[Dict], cfg: Dict) -> List[Dict]:
             continue
         por_seccion[g["seccion"]] += 1
         elegidos.append(g)
+    # Segunda pasada: si hay pocas secciones con material, se completa sin tope.
+    for g in elegibles:
+        if len(elegidos) >= maximo:
+            break
+        if g not in elegidos:
+            elegidos.append(g)
     return elegidos
 
 
-def verificar_imagen_nota(client, noticia_id: str, g: Dict) -> str:
+def verificar_imagen_nota(client, noticia_id: str, g: Dict) -> Tuple[bool, str]:
     """
     Image gate: revisa la foto que quedó en la nota y, si tiene marca/logo, prueba
-    las de las otras fuentes del grupo. Devuelve el motivo para `auto_motivo`.
+    las de las otras fuentes del grupo. Devuelve (apta, motivo para `auto_motivo`).
     """
     import image_gate
     from image_handler import ImageHandler
@@ -153,19 +162,19 @@ def verificar_imagen_nota(client, noticia_id: str, g: Dict) -> str:
     if elegida["url"] is None:
         analizadas = [d for d in elegida["detalle"] if d["resultado"]]
         if not analizadas:
-            return "imagen: no se pudo verificar"
+            return False, "imagen: no se pudo verificar"
         r = analizadas[0]["resultado"]
-        return "imagen: con marca/logo (%s)" % (r.get("nombre_medio") or r.get("motivo") or "sin detalle")
+        return False, "imagen: con marca/logo (%s)" % (r.get("nombre_medio") or r.get("motivo") or "sin detalle")
     if elegida["url"] == actual:
-        return "imagen: limpia"
+        return True, "imagen: limpia"
     nueva = ImageHandler(client).upload_image(elegida["url"], noticia_id)
     if not nueva:
-        return "imagen: alternativa limpia pero no se pudo subir"
+        return False, "imagen: alternativa limpia pero no se pudo subir"
     client.update_imagen(noticia_id, nueva)
-    return "imagen: reemplazada por alternativa limpia"
+    return True, "imagen: reemplazada por alternativa limpia"
 
 
-def verificar_hechos_nota(client, noticia_id: str, g: Dict, textos_fuente: List[str]) -> str:
+def verificar_hechos_nota(client, noticia_id: str, g: Dict, textos_fuente: List[str]) -> Tuple[bool, str]:
     """Fact gate: contrasta la nota redactada con los textos de sus fuentes."""
     import fact_gate
 
@@ -178,8 +187,43 @@ def verificar_hechos_nota(client, noticia_id: str, g: Dict, textos_fuente: List[
         seccion=fila.get("seccion") or g["seccion"], n_fuentes=g["n_fuentes"],
     )
     if ev["automatica"]:
-        return "hechos: verificados"
-    return "hechos: " + "; ".join(ev["motivos"])
+        return True, "hechos: verificados"
+    return False, "hechos: " + "; ".join(ev["motivos"])
+
+
+def publicar_en_portal(noticia_id: str) -> Tuple[bool, str]:
+    """
+    Publica vía /api/publicar del portal (mismo camino que el botón del admin: estado,
+    fecha, push OneSignal, kit de Instagram y recálculo de la portada por trigger SQL).
+    """
+    import requests
+    import config
+
+    if not config.INTERNAL_API_SECRET:
+        return False, "INTERNAL_API_SECRET no configurado"
+    try:
+        r = requests.post(
+            f"{config.PORTAL_URL.rstrip('/')}/api/publicar",
+            json={"id": noticia_id},
+            headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+            timeout=30,
+        )
+        if r.status_code == 200 and r.json().get("ok"):
+            return True, "ok"
+        return False, f"portal {r.status_code}: {r.text[:150]}"
+    except Exception as e:
+        return False, f"portal inaccesible: {str(e)[:150]}"
+
+
+def publicadas_hoy(client) -> int:
+    """Notas que la edición ya publicó hoy (día argentino): evita pasarse si se reejecuta."""
+    ahora_ar = datetime.now(timezone.utc) - timedelta(hours=3)
+    inicio_utc = ahora_ar.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=3)
+    resp = (
+        client.client.table("edicion_log").select("id", count="exact")
+        .eq("resultado", "publicada").gte("ejecutado_at", inicio_utc.isoformat()).execute()
+    )
+    return resp.count or 0
 
 
 def _log(client, modo: str, g: Dict, resultado: str, motivo: str = "", noticia_id: Optional[str] = None) -> None:
@@ -203,22 +247,39 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
     """
     `procesar` es `pipeline_ia` (inyectado para evitar import circular).
     dry_run=True solo rankea y loguea, sin llamar a la IA.
+
+    Con `edicion_auto_publicar` activo publica las notas que pasan el image gate y el
+    fact gate hasta completar `edicion_max` en el día. Como algunas notas no van a pasar
+    los gates, se evalúan hasta 2x candidatas; las que no pasan quedan en 'pendiente'
+    con el motivo en `auto_motivo`.
     """
     cfg = client.get_scraper_config() or {}
     if not cfg.get("edicion_auto_activa") and not dry_run:
         return {"ok": True, "omitida": "edicion_auto_activa=false"}
 
-    top = seleccionar(fusionar_duplicados(candidatos(client)), cfg)
-    modo = "sombra"  # Fase 0: nunca publica
-    resumen = {"ok": True, "seleccionados": len(top), "procesadas": 0, "errores": 0, "items": []}
+    auto = bool(cfg.get("edicion_auto_publicar")) and not dry_run
+    modo = "auto" if auto else "sombra"
+    objetivo = int(cfg.get("edicion_max") or 8)
+    if auto:
+        objetivo -= publicadas_hoy(client)
+        if objetivo <= 0:
+            return {"ok": True, "omitida": "ya se publicó el cupo diario"}
 
-    for g in top:
+    pool = seleccionar(fusionar_duplicados(candidatos(client)), cfg, limite=objetivo * 2)
+    resumen = {"ok": True, "modo": modo, "objetivo": objetivo, "candidatas": len(pool),
+               "procesadas": 0, "publicadas": 0, "para_revision": 0, "errores": 0, "items": []}
+
+    for g in pool:
+        if auto and resumen["publicadas"] >= objetivo:
+            break
         item = {"grupo_id": g["grupo_id"], "titulo": g["notas"][0].get("titulo"), "score": g["score"],
                 "seccion": g["seccion"], "n_fuentes": g["n_fuentes"]}
         if dry_run:
             _log(client, modo, g, "omitida", "dry_run")
             resumen["items"].append({**item, "resultado": "dry_run"})
             continue
+        if not auto and resumen["procesadas"] >= objetivo:
+            break
         ids = [n["id"] for n in g["notas"]]
         # Los textos de las fuentes hay que leerlos ANTES: pipeline_ia pisa el cuerpo de la líder.
         try:
@@ -231,29 +292,48 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         except Exception as e:  # una nota no debe frenar la edición
             logger.exception("Error procesando grupo %s", g["grupo_id"])
             r = {"ok": False, "error": str(e)[:200]}
-        if r.get("ok"):
-            resumen["procesadas"] += 1
-            # Las notas de grupos fusionados quedan raw si no se las descarta.
-            sobrantes = [i for i in ids if i != r["noticia_id"]]
-            if sobrantes:
-                client.client.table("noticias").update({"estado": "descartada"})                     .in_("id", sobrantes).eq("estado", "raw").execute()
-            try:
-                motivo_img = verificar_imagen_nota(client, r["noticia_id"], g)
-            except Exception:
-                logger.exception("Image gate falló para %s", r["noticia_id"])
-                motivo_img = "imagen: no se pudo verificar"
-            try:
-                motivo_hechos = verificar_hechos_nota(client, r["noticia_id"], g, textos_fuente)
-            except Exception:
-                logger.exception("Fact gate falló para %s", r["noticia_id"])
-                motivo_hechos = "hechos: no se pudo verificar"
-            motivo = f"{motivo_hechos} | {motivo_img}"
-            client.client.table("noticias").update(
-                {"score": g["score"], "auto_motivo": f"pendiente de revision | {motivo}"[:500]}
-            ).eq("id", r["noticia_id"]).execute()
-            _log(client, modo, g, "procesada", motivo=motivo, noticia_id=r["noticia_id"])
-        else:
+        if not r.get("ok"):
             resumen["errores"] += 1
             _log(client, modo, g, "error", r.get("error", ""))
-        resumen["items"].append({**item, "resultado": "ok" if r.get("ok") else "error"})
+            resumen["items"].append({**item, "resultado": "error", "motivo": r.get("error", "")})
+            continue
+
+        resumen["procesadas"] += 1
+        noticia_id = r["noticia_id"]
+        # Las notas de grupos fusionados quedan raw si no se las descarta.
+        sobrantes = [i for i in ids if i != noticia_id]
+        if sobrantes:
+            client.client.table("noticias").update({"estado": "descartada"}) \
+                .in_("id", sobrantes).eq("estado", "raw").execute()
+        try:
+            img_ok, motivo_img = verificar_imagen_nota(client, noticia_id, g)
+        except Exception:
+            logger.exception("Image gate falló para %s", noticia_id)
+            img_ok, motivo_img = False, "imagen: no se pudo verificar"
+        try:
+            hechos_ok, motivo_hechos = verificar_hechos_nota(client, noticia_id, g, textos_fuente)
+        except Exception:
+            logger.exception("Fact gate falló para %s", noticia_id)
+            hechos_ok, motivo_hechos = False, "hechos: no se pudo verificar"
+        motivo = f"{motivo_hechos} | {motivo_img}"
+        aprobada = img_ok and hechos_ok
+
+        if auto and aprobada:
+            ok_pub, detalle = publicar_en_portal(noticia_id)
+            if ok_pub:
+                resumen["publicadas"] += 1
+                client.client.table("noticias").update(
+                    {"score": g["score"], "auto_motivo": f"publicada automaticamente | {motivo}"[:500]}
+                ).eq("id", noticia_id).execute()
+                _log(client, modo, g, "publicada", motivo=motivo, noticia_id=noticia_id)
+                resumen["items"].append({**item, "resultado": "publicada"})
+                continue
+            motivo = f"{motivo} | publicacion fallida: {detalle}"
+
+        resumen["para_revision"] += 1
+        client.client.table("noticias").update(
+            {"score": g["score"], "auto_motivo": f"pendiente de revision | {motivo}"[:500]}
+        ).eq("id", noticia_id).execute()
+        _log(client, modo, g, "procesada", motivo=motivo, noticia_id=noticia_id)
+        resumen["items"].append({**item, "resultado": "revision", "motivo": motivo})
     return resumen

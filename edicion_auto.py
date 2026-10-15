@@ -165,6 +165,23 @@ def verificar_imagen_nota(client, noticia_id: str, g: Dict) -> str:
     return "imagen: reemplazada por alternativa limpia"
 
 
+def verificar_hechos_nota(client, noticia_id: str, g: Dict, textos_fuente: List[str]) -> str:
+    """Fact gate: contrasta la nota redactada con los textos de sus fuentes."""
+    import fact_gate
+
+    fila = (
+        client.client.table("noticias").select("titulo, cuerpo, seccion")
+        .eq("id", noticia_id).single().execute().data or {}
+    )
+    ev = fact_gate.evaluar_nota(
+        fila.get("titulo", ""), fila.get("cuerpo", ""), textos_fuente,
+        seccion=fila.get("seccion") or g["seccion"], n_fuentes=g["n_fuentes"],
+    )
+    if ev["automatica"]:
+        return "hechos: verificados"
+    return "hechos: " + "; ".join(ev["motivos"])
+
+
 def _log(client, modo: str, g: Dict, resultado: str, motivo: str = "", noticia_id: Optional[str] = None) -> None:
     try:
         client.client.table("edicion_log").insert({
@@ -203,6 +220,12 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
             resumen["items"].append({**item, "resultado": "dry_run"})
             continue
         ids = [n["id"] for n in g["notas"]]
+        # Los textos de las fuentes hay que leerlos ANTES: pipeline_ia pisa el cuerpo de la líder.
+        try:
+            textos_fuente = [n.get("cuerpo") or "" for n in client.get_notas_by_ids(ids)]
+        except Exception:
+            logger.exception("No se pudieron leer las fuentes de %s", g["grupo_id"])
+            textos_fuente = []
         try:
             r = procesar(g["grupo_id"], ids, None, g["seccion"])
         except Exception as e:  # una nota no debe frenar la edición
@@ -219,10 +242,16 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
             except Exception:
                 logger.exception("Image gate falló para %s", r["noticia_id"])
                 motivo_img = "imagen: no se pudo verificar"
+            try:
+                motivo_hechos = verificar_hechos_nota(client, r["noticia_id"], g, textos_fuente)
+            except Exception:
+                logger.exception("Fact gate falló para %s", r["noticia_id"])
+                motivo_hechos = "hechos: no se pudo verificar"
+            motivo = f"{motivo_hechos} | {motivo_img}"
             client.client.table("noticias").update(
-                {"score": g["score"], "auto_motivo": f"pendiente de revision | {motivo_img}"}
+                {"score": g["score"], "auto_motivo": f"pendiente de revision | {motivo}"[:500]}
             ).eq("id", r["noticia_id"]).execute()
-            _log(client, modo, g, "procesada", motivo=motivo_img, noticia_id=r["noticia_id"])
+            _log(client, modo, g, "procesada", motivo=motivo, noticia_id=r["noticia_id"])
         else:
             resumen["errores"] += 1
             _log(client, modo, g, "error", r.get("error", ""))

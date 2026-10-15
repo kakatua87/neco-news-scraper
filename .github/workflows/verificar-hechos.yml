@@ -1,0 +1,26 @@
+name: Verificar hechos
+
+# Prueba manual del fact gate. `payload` es un JSON con
+# {"titulo": "...", "cuerpo": "...", "fuentes": ["...", "..."], "seccion": "..."}.
+
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: "JSON con titulo, cuerpo, fuentes[] y seccion"
+        required: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verificar
+        env:
+          PAYLOAD: ${{ inputs.payload }}
+        run: |
+          curl -fsS --retry 6 --retry-delay 15 --max-time 120 "${{ secrets.SCRAPER_URL }}/health" >/dev/null
+          printf '%s' "$PAYLOAD" | curl -fsS --max-time 300 -X POST \
+            -H "Authorization: Bearer ${{ secrets.INTERNAL_API_SECRET }}" \
+            -H "Content-Type: application/json" --data-binary @- \
+            "${{ secrets.SCRAPER_URL }}/verificar-hechos" | python3 -m json.tool

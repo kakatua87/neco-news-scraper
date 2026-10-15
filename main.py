@@ -719,6 +719,24 @@ def verificar_imagen(body: Dict) -> Dict:
     return {"ok": True, "resultados": [{"url": u, **image_gate.diagnosticar_imagen(u)} for u in urls]}
 
 
+@app.post("/verificar-hechos", dependencies=[Depends(require_internal_secret)])
+def verificar_hechos(body: Dict) -> Dict:
+    """
+    Fact gate sobre una nota. Body: { titulo, cuerpo, fuentes: [texto, ...], seccion?, n_fuentes? }
+    """
+    import fact_gate
+    titulo = str(body.get("titulo") or "")
+    cuerpo = str(body.get("cuerpo") or "")
+    fuentes = [str(f) for f in (body.get("fuentes") or []) if isinstance(f, str)][:6]
+    if not cuerpo or not fuentes:
+        return {"ok": False, "error": "cuerpo y fuentes son obligatorios"}
+    ev = fact_gate.evaluar_nota(
+        titulo, cuerpo, fuentes,
+        seccion=str(body.get("seccion") or ""), n_fuentes=int(body.get("n_fuentes") or len(fuentes)),
+    )
+    return {"ok": True, **ev}
+
+
 @app.post("/procesar-redaccion", dependencies=[Depends(require_internal_secret)])
 async def procesar_redaccion(request: Request) -> Dict:
     """

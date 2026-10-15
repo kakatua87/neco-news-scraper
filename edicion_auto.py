@@ -9,6 +9,8 @@ verificación (fases 1-3).
 
 import logging
 import math
+import re
+import unicodedata
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional
@@ -32,6 +34,51 @@ def _parse_ts(valor: str) -> datetime:
 
 def _n_fuentes(notas: List[Dict]) -> int:
     return len({(n.get("fuente") or "").strip().lower() for n in notas} - {""}) or 1
+
+
+_STOP = {
+    "de", "la", "el", "los", "las", "un", "una", "unos", "unas", "en", "por", "con", "para", "del",
+    "al", "y", "a", "o", "que", "se", "su", "sus", "lo", "es", "fue", "ser", "como", "mas", "sin",
+    "sobre", "entre", "tras", "ante", "este", "esta", "estos", "estas", "ya", "no", "si", "le",
+}
+UMBRAL_DUPLICADO = 0.5
+MIN_COMPARTIDOS = 3
+
+
+def _tokens(titulo: str) -> set:
+    """Tokens de contenido, sin tildes y truncados a 5 letras (despistó ~ despiste)."""
+    t = unicodedata.normalize("NFKD", (titulo or "").lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return {w[:5] for w in re.findall(r"[a-z0-9]+", t) if w not in _STOP and len(w) > 1}
+
+
+def son_misma_noticia(titulo_a: str, titulo_b: str) -> bool:
+    a, b = _tokens(titulo_a), _tokens(titulo_b)
+    if not a or not b:
+        return False
+    comunes = len(a & b)
+    return comunes >= MIN_COMPARTIDOS and comunes / min(len(a), len(b)) >= UMBRAL_DUPLICADO
+
+
+def fusionar_duplicados(cands: List[Dict]) -> List[Dict]:
+    """
+    Junta grupos distintos que cuentan el mismo hecho (el agrupador del scraper
+    no los une si cambia la sección o el enfoque del título). El grupo con más
+    fuentes manda; las notas de los demás se suman para que la IA las use como
+    fuentes adicionales y para que `n_fuentes` refleje la cobertura real.
+    """
+    orden = sorted(cands, key=lambda g: (-_n_fuentes(g["notas"]), g["grupo_id"]))
+    resultado: List[Dict] = []
+    for g in orden:
+        titulo = g["notas"][0].get("titulo", "")
+        destino = next((r for r in resultado if son_misma_noticia(r["notas"][0].get("titulo", ""), titulo)), None)
+        if destino is None:
+            g.setdefault("fusionados", [])
+            resultado.append(g)
+        else:
+            destino["notas"] = destino["notas"] + g["notas"]
+            destino["fusionados"].append(g["grupo_id"])
+    return resultado
 
 
 def candidatos(client, horas: int = VENTANA_HORAS) -> List[Dict]:
@@ -116,7 +163,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
     if not cfg.get("edicion_auto_activa") and not dry_run:
         return {"ok": True, "omitida": "edicion_auto_activa=false"}
 
-    top = seleccionar(candidatos(client), cfg)
+    top = seleccionar(fusionar_duplicados(candidatos(client)), cfg)
     modo = "sombra"  # Fase 0: nunca publica
     resumen = {"ok": True, "seleccionados": len(top), "procesadas": 0, "errores": 0, "items": []}
 
@@ -135,6 +182,10 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
             r = {"ok": False, "error": str(e)[:200]}
         if r.get("ok"):
             resumen["procesadas"] += 1
+            # Las notas de grupos fusionados quedan raw si no se las descarta.
+            sobrantes = [i for i in ids if i != r["noticia_id"]]
+            if sobrantes:
+                client.client.table("noticias").update({"estado": "descartada"})                     .in_("id", sobrantes).eq("estado", "raw").execute()
             client.client.table("noticias").update(
                 {"score": g["score"], "auto_motivo": "edicion_matutina: pendiente de revision"}
             ).eq("id", r["noticia_id"]).execute()

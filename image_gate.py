@@ -123,9 +123,9 @@ def analizar_imagen(url: str) -> Optional[Dict]:
         ],
     }]
     base_url = config._PROVIDER_DEFAULTS["gemini"]["base_url"]
-    for key in keys:
-        client = OpenAI(api_key=key, base_url=base_url)
-        for modelo in _modelos():
+    for key in keys[:2]:
+        client = OpenAI(api_key=key, base_url=base_url, timeout=25, max_retries=0)
+        for modelo in _modelos()[:2]:
             try:
                 resp = client.chat.completions.create(
                     model=modelo, messages=mensajes, temperature=0, max_tokens=300,

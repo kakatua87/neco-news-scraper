@@ -706,16 +706,13 @@ async def edicion_matutina(dry_run: bool = False) -> Dict:
 
 
 @app.post("/verificar-imagen", dependencies=[Depends(require_internal_secret)])
-async def verificar_imagen(request: Request) -> Dict:
+def verificar_imagen(body: Dict) -> Dict:
+    # def (no async): corre en el threadpool y no bloquea /health mientras espera a la visión.
     """
     Detecta marca de agua / logo de medio en una imagen con visión.
     Body: { urls: [url, ...] } (máx. 5). Devuelve el análisis de cada una.
     """
     import image_gate
-    try:
-        body = await request.json()
-    except Exception:
-        return {"ok": False, "error": "json inválido"}
     urls = [u for u in (body.get("urls") or []) if isinstance(u, str)][:5]
     if not urls:
         return {"ok": False, "error": "urls es obligatorio"}

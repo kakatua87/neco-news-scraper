@@ -829,7 +829,10 @@ class AIProcessor:
                         {"role": "user", "content": user_prompt},
                     ],
                     temperature=0.65,
-                    max_tokens=3200,
+                    # 3200 se quedaba corto: los modelos Gemini 3.x cuentan sus tokens de
+                    # razonamiento dentro de este tope y la nota salia cortada (JSON truncado,
+                    # reparado luego con solo titulo y cuerpo).
+                    max_tokens=8192,
                     # Fuerza salida JSON válida a nivel de decoding — sin esto,
                     # el modelo a veces mete saltos de línea sin escapar
                     # dentro de un string (p. ej. alrededor de los "## "
@@ -840,6 +843,8 @@ class AIProcessor:
                 if modelo_idx > 0:
                     logger.warning("IA respondió con el modelo alternativo %s", modelos[modelo_idx])
 
+                if getattr(response.choices[0], "finish_reason", None) == "length":
+                    logger.warning("IA corto la respuesta por limite de tokens (modelo=%s)", modelos[modelo_idx])
                 text = (response.choices[0].message.content or "").strip()
                 if not text:
                     logger.warning("IA devolvió texto vacío (intento %s/%s)", attempt + 1, max_retries)

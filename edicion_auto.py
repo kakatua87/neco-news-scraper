@@ -287,11 +287,15 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         except Exception:
             logger.exception("No se pudieron leer las fuentes de %s", g["grupo_id"])
             textos_fuente = []
-        try:
-            r = procesar(g["grupo_id"], ids, None, g["seccion"])
-        except Exception as e:  # una nota no debe frenar la edición
-            logger.exception("Error procesando grupo %s", g["grupo_id"])
-            r = {"ok": False, "error": str(e)[:200]}
+        r = {"ok": False, "error": "sin intentar"}
+        for _intento in range(2):  # la IA a veces devuelve el JSON incompleto: un reintento
+            try:
+                r = procesar(g["grupo_id"], ids, None, g["seccion"])
+            except Exception as e:  # una nota no debe frenar la edición
+                logger.exception("Error procesando grupo %s", g["grupo_id"])
+                r = {"ok": False, "error": str(e)[:200]}
+            if r.get("ok") or "campos requeridos" not in str(r.get("error", "")):
+                break
         if not r.get("ok"):
             resumen["errores"] += 1
             _log(client, modo, g, "error", r.get("error", ""))

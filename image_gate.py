@@ -11,6 +11,7 @@ import base64
 import io
 import json
 import logging
+import time
 from typing import Dict, List, Optional
 
 import requests
@@ -127,19 +128,25 @@ def diagnosticar_imagen(url: str) -> Dict:
     ultimo_error = "sin respuesta"
     for key in keys[:2]:
         client = OpenAI(api_key=key, base_url=base_url, timeout=25, max_retries=0)
-        for modelo in _modelos()[:2]:
-            try:
-                resp = client.chat.completions.create(
-                    model=modelo, messages=mensajes, temperature=0, max_tokens=300,
-                    response_format={"type": "json_object"},
-                )
-                parsed = json.loads(resp.choices[0].message.content or "{}")
-                if isinstance(parsed, dict) and "marca_agua" in parsed:
-                    return {"resultado": interpretar(parsed), "error": None}
-                ultimo_error = "respuesta sin campo marca_agua"
-            except Exception as e:
-                ultimo_error = "%s: %s" % (modelo, str(e)[:200])
-                logger.warning("Visión falló (modelo=%s): %s", modelo, str(e)[:150])
+        for modelo in _modelos():
+            for intento in range(2):  # 503 "high demand" suele ser transitorio
+                try:
+                    resp = client.chat.completions.create(
+                        model=modelo, messages=mensajes, temperature=0, max_tokens=300,
+                        response_format={"type": "json_object"},
+                    )
+                    parsed = json.loads(resp.choices[0].message.content or "{}")
+                    if isinstance(parsed, dict) and "marca_agua" in parsed:
+                        return {"resultado": interpretar(parsed), "error": None}
+                    ultimo_error = "respuesta sin campo marca_agua"
+                    break
+                except Exception as e:
+                    ultimo_error = "%s: %s" % (modelo, str(e)[:200])
+                    logger.warning("Visión falló (modelo=%s, intento=%s): %s", modelo, intento + 1, str(e)[:150])
+                    if "503" in str(e) or "429" in str(e):
+                        time.sleep(4)
+                        continue
+                    break
     return {"resultado": None, "error": ultimo_error}
 
 

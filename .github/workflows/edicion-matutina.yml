@@ -26,3 +26,12 @@ jobs:
           curl -fsS --max-time 900 -X POST \
             -H "Authorization: Bearer ${{ secrets.INTERNAL_API_SECRET }}" \
             "${{ secrets.SCRAPER_URL }}/edicion-matutina?dry_run=${{ inputs.dry_run || false }}"
+
+      # La edición corre en segundo plano en el servidor (tarda varios minutos). Se mantiene
+      # despierto el servicio con pings para que el free tier de Render no lo duerma a mitad.
+      - name: Mantener despierto mientras corre
+        run: |
+          for i in $(seq 1 25); do
+            sleep 60
+            curl -fsS --max-time 30 "${{ secrets.SCRAPER_URL }}/health" >/dev/null || true
+          done

@@ -79,7 +79,7 @@ def _quitar_fechas_cercanas(texto: str, ventana_dias: int = 7) -> str:
             return " " if anios else m.group(0)
         return " " if int(anio) in anios else m.group(0)
 
-    patron = r"(\d{1,2}) de (" + "|".join(_MESES) + r")(?: de (\d{4}))?"
+    patron = r"\b(\d{1,2}) de (" + "|".join(_MESES) + r")(?: de (\d{4}))?"
     return re.sub(patron, _reemplazo, _norm(texto))
 
 

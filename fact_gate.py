@@ -80,7 +80,9 @@ def _quitar_fechas_cercanas(texto: str, ventana_dias: int = 7) -> str:
         return " " if int(anio) in anios else m.group(0)
 
     patron = r"\b(\d{1,2}) de (" + "|".join(_MESES) + r")(?: de (\d{4}))?"
-    return re.sub(patron, _reemplazo, _norm(texto))
+    sin_fechas = re.sub(patron, _reemplazo, _norm(texto))
+    # Horarios ("10:00", "18.30 hs") tampoco cuentan como cifras a respaldar.
+    return re.sub(r"\b\d{1,2}[:.]\d{2}\b(?:\s*hs?\.?)?|\b\d{1,2}\s*hs\b", " ", sin_fechas)
 
 
 def _numeros(texto: str) -> set:

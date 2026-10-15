@@ -269,6 +269,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
     resumen = {"ok": True, "modo": modo, "objetivo": objetivo, "candidatas": len(pool),
                "procesadas": 0, "publicadas": 0, "para_revision": 0, "errores": 0, "items": []}
 
+    errores_cuota = 0
     for g in pool:
         if auto and resumen["publicadas"] >= objetivo:
             break
@@ -298,8 +299,14 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
                 break
         if not r.get("ok"):
             resumen["errores"] += 1
+            sin_cuota = "429" in str(r.get("error", "")) or "quota" in str(r.get("error", "")).lower()
+            errores_cuota = errores_cuota + 1 if sin_cuota else 0
             _log(client, modo, g, "error", r.get("error", ""))
             resumen["items"].append({**item, "resultado": "error", "motivo": r.get("error", "")})
+            if errores_cuota >= 2:
+                logger.error("Cuota de IA agotada: se corta la edición para no gastar más llamadas")
+                resumen["cortada_por_cuota"] = True
+                break
             continue
 
         resumen["procesadas"] += 1

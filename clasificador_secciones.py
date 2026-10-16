@@ -2,10 +2,9 @@
 Clasificación previa de las candidatas de la edición por sección del portal.
 
 El scraper etiqueta casi todo como "Local" (117 de 146 notas), así que no sirve para repartir la
-edición entre secciones. Con una sola llamada al modelo se clasifica por TEMA el lote de títulos,
-con las mismas reglas del prompt de redacción (Local = hechos de Necochea y la región; lo nacional
-o internacional va a su tema). Si el modelo falla, se cae a palabras clave y, en última instancia,
-a la etiqueta del scraper.
+edición entre secciones. Con una sola llamada al modelo se clasifica el lote de títulos: Policiales
+y Deportes por tema, Local para todo lo que ocurre en Necochea y la región, y el resto por tema.
+Si el modelo falla se cae a palabras clave y, en última instancia, a la etiqueta del scraper.
 """
 
 import logging
@@ -21,25 +20,26 @@ SECCIONES_VALIDAS = (
 )
 
 _PROMPT = (
-    "Sos el editor de un diario de Necochea. Clasificá cada nota en UNA sección según su TEMA.\n"
+    "Sos el editor de un diario de Necochea. Clasificá cada nota en UNA sección.\n"
     "Secciones: " + ", ".join(SECCIONES_VALIDAS) + ".\n"
-    "- Deportes: cualquier hecho deportivo, local, nacional o internacional.\n"
-    "- Policiales: delitos, accidentes, causas judiciales, rescates, operativos.\n"
-    "- Política: gobierno, elecciones, gestión, legislación.\n"
-    "- Economía: precios, empleo, comercio, finanzas, tarifas.\n"
-    "- Educación: escuelas, universidades, docentes, paros y marchas educativas.\n"
-    "- Salud, Cultura, Tecnología según el tema principal.\n"
-    "- Local: SOLO hechos que ocurren en Necochea, Quequén y la región, o que los afectan de forma "
-    "concreta y mencionada. Una noticia nacional o internacional NO es Local.\n"
-    "- Sociedad: lo que no entra claramente en las anteriores.\n"
+    "Orden de decisión:\n"
+    "1. Policiales: delitos, accidentes, causas judiciales, rescates, operativos (sea local o no).\n"
+    "2. Deportes: cualquier hecho deportivo (sea local o no).\n"
+    "3. Local: todo hecho que ocurre en Necochea, Quequén o la región, o que los afecta de forma "
+    "concreta (gobierno municipal, puerto, servicios, eventos, aniversarios, clima local, vecinos, "
+    "comercio local, cultura y educación locales), aunque tenga un tema de otra sección.\n"
+    "4. Si NO es local: Política (gobierno, elecciones, legislación), Economía (precios, empleo, "
+    "finanzas, tarifas), Educación, Salud, Cultura, Tecnología según el tema principal.\n"
+    "5. Sociedad: lo nacional o general que no entra claramente en las anteriores.\n"
     "Respondé SOLO JSON: {\"ok\": true, \"clasificacion\": [{\"i\": 0, \"seccion\": \"Local\"}, ...]} "
     "con una entrada por cada nota, usando exactamente los nombres de sección de la lista."
 )
 
+# Orden importa: las dos primeras (Policiales, Deportes) mandan sobre "Local" en el fallback.
 _PALABRAS = (
     ("Policiales", r"polic|detenid|arrest|robo|robaron|choc|herid|accidente|homicid|asesin|secuestr|"
                    r"incendi|balacera|vuelc|despist|prefectura|fiscal|condena|estafa|narco|droga|apresad|"
-                   r"rescat|operativo"),
+                   r"rescat|operativo|atrapad"),
     ("Deportes", r"fútbol|futbol|liga |gol |goles|torneo|campeonat|partido|boxeo|básquet|basquet|tenis|golf|"
                  r"selecci[oó]n|mundial|atleta|piloto|rally|clásico|clasico|cinturon"),
     ("Educación", r"escuela|docente|universit|unicen|clases|alumnos|estudiantes|paro docente"),
@@ -59,13 +59,16 @@ def _norm(t: str) -> str:
 
 
 def por_palabras(titulo: str, etiqueta_scraper: str = "") -> str:
-    """Fallback sin modelo: palabras clave del título."""
+    """Fallback sin modelo: Policiales y Deportes por palabras clave, Local por lugar, el resto por tema."""
     t = _norm(titulo)
-    for seccion, patron in _PALABRAS:
+    for seccion, patron in _PALABRAS[:2]:  # Policiales, Deportes
         if re.search(patron, t):
             return seccion
-    if re.search(r"necochea|quequ[eé]n|costa atl", t):
+    if re.search(r"necochea|quequ[eé]n|costa atl|lober[ií]a|san cayetano", t):
         return "Local"
+    for seccion, patron in _PALABRAS[2:]:
+        if re.search(patron, t):
+            return seccion
     return etiqueta_scraper if etiqueta_scraper in SECCIONES_VALIDAS else "Sociedad"
 
 

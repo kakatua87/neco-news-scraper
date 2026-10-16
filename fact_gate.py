@@ -159,7 +159,7 @@ _PROMPT = (
 )
 
 
-def _llm_json(mensajes: List[Dict]) -> Optional[Dict]:
+def _llm_json(mensajes: List[Dict], clave: str = "ok", max_tokens: int = 4096) -> Optional[Dict]:
     keys = config.gemini_keys_ordenadas()
     if not keys:
         return None
@@ -175,11 +175,11 @@ def _llm_json(mensajes: List[Dict]) -> Optional[Dict]:
             for _ in range(2):
                 try:
                     r = client.chat.completions.create(
-                        model=modelo, messages=mensajes, temperature=0, max_tokens=4096,
+                        model=modelo, messages=mensajes, temperature=0, max_tokens=max_tokens,
                         response_format={"type": "json_object"},
                     )
                     parsed = json.loads(r.choices[0].message.content or "{}")
-                    if isinstance(parsed, dict) and "ok" in parsed:
+                    if isinstance(parsed, dict) and clave in parsed:
                         return parsed
                     break
                 except Exception as e:

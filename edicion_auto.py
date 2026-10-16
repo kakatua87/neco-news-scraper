@@ -111,39 +111,65 @@ def puntuar(grupo: Dict, pesos: Dict, ahora: Optional[datetime] = None) -> float
     return round(score, 3)
 
 
-def seleccionar(cands: List[Dict], cfg: Dict, limite: Optional[int] = None) -> List[Dict]:
-    """
-    Rankea y devuelve hasta `limite` grupos priorizando variedad de secciones:
-    primero respeta el tope por sección y, si no alcanza, completa con lo que sobra.
-    """
+# Reparto de la edición: Locales y Policiales son lo principal; el resto de las secciones con
+# material entra al menos una vez. Los topes evitan que una sola sección se coma la edición.
+OBJETIVO_POR_SECCION = {"Local": 2, "Policiales": 2}
+OBJETIVO_DEFAULT = 1
+TOPE_POR_SECCION = {"Local": 3, "Policiales": 3}
+TOPE_DEFAULT = 2
+MAX_A_CLASIFICAR = 40
+
+
+def ordenar(cands: List[Dict], cfg: Dict) -> List[Dict]:
+    """Puntúa y ordena las candidatas (mejor primero) sin las secciones excluidas del scraper."""
     pesos = {**PESOS_DEFAULT, **(cfg.get("edicion_pesos") or {})}
     excluidas = set(cfg.get("edicion_secciones_excluidas") or SECCIONES_EXCLUIDAS_DEFAULT)
-    maximo = limite if limite is not None else int(cfg.get("edicion_max") or 8)
-
     for g in cands:
         g["seccion"] = g["notas"][0].get("seccion") or "Local"
         g["n_fuentes"] = _n_fuentes(g["notas"])
         g["score"] = puntuar(g, pesos)
+    return sorted((g for g in cands if g["seccion"] not in excluidas), key=lambda g: g["score"], reverse=True)
 
-    elegibles = [g for g in cands if g["seccion"] not in excluidas]
-    elegibles.sort(key=lambda g: g["score"], reverse=True)
 
-    elegidos: List[Dict] = []
-    por_seccion: Dict[str, int] = defaultdict(int)
-    for g in elegibles:
-        if len(elegidos) >= maximo:
-            break
-        if por_seccion[g["seccion"]] >= pesos["max_por_seccion"]:
-            continue
-        por_seccion[g["seccion"]] += 1
-        elegidos.append(g)
-    # Segunda pasada: si hay pocas secciones con material, se completa sin tope.
-    for g in elegibles:
-        if len(elegidos) >= maximo:
-            break
-        if g not in elegidos:
-            elegidos.append(g)
-    return elegidos
+def clasificar_pool(pool: List[Dict], cfg: Dict) -> List[Dict]:
+    """
+    Reemplaza la etiqueta del scraper por la sección real (por tema) y descarta las excluidas.
+    La sección del scraper queda en `seccion_scraper`.
+    """
+    import clasificador_secciones
+
+    secciones = clasificador_secciones.clasificar(
+        [{"titulo": g["notas"][0].get("titulo") or "", "etiqueta": g["seccion"]} for g in pool]
+    )
+    excluidas = set(cfg.get("edicion_secciones_excluidas") or SECCIONES_EXCLUIDAS_DEFAULT)
+    for g, sec in zip(pool, secciones):
+        g["seccion_scraper"] = g["seccion"]
+        g["seccion"] = sec
+    return [g for g in pool if g["seccion"] not in excluidas]
+
+
+def siguiente_candidata(restantes: List[Dict], aprobadas_por_seccion: Dict[str, int]) -> Dict:
+    """
+    Elige la próxima nota a procesar según lo que falta cubrir:
+      1) Locales y Policiales por debajo de su objetivo,
+      2) cualquier otra sección todavía sin una nota aprobada,
+      3) el resto por puntaje, respetando el tope por sección.
+    Como se recalcula con lo ya aprobado, si una nota no pasa los gates se prueba otra de la
+    misma sección antes de pasar a las demás.
+    """
+    def prioridad(g: Dict):
+        sec = g["seccion"]
+        tiene = aprobadas_por_seccion.get(sec, 0)
+        objetivo = OBJETIVO_POR_SECCION.get(sec, OBJETIVO_DEFAULT)
+        if tiene < objetivo:
+            rango = 0 if sec in OBJETIVO_POR_SECCION else 1
+        elif tiene < TOPE_POR_SECCION.get(sec, TOPE_DEFAULT):
+            rango = 2
+        else:
+            rango = 3
+        return (rango, -g["score"])
+
+    return min(restantes, key=prioridad)
 
 
 def _dominio(url: Optional[str]) -> str:
@@ -296,12 +322,12 @@ def _log(client, modo: str, g: Dict, resultado: str, motivo: str = "", noticia_i
 def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = False) -> Dict:
     """
     `procesar` es `pipeline_ia` (inyectado para evitar import circular).
-    dry_run=True solo rankea y loguea, sin llamar a la IA.
+    dry_run=True solo rankea, clasifica y loguea el reparto previsto, sin redactar con la IA.
 
-    Con `edicion_auto_publicar` activo publica las notas que pasan el image gate y el
-    fact gate hasta completar `edicion_max` en el día. Como algunas notas no van a pasar
-    los gates, se evalúan hasta 2x candidatas; las que no pasan quedan en 'pendiente'
-    con el motivo en `auto_motivo`.
+    Se procesan notas hasta tener `edicion_max` aprobadas (pasan image gate y fact gate), con un
+    máximo de 2x procesadas. Con `edicion_auto_publicar` las aprobadas se publican; sin él (modo
+    sombra) solo se cuentan. Las que no pasan quedan en 'pendiente' con el motivo en `auto_motivo`.
+    El orden lo decide `siguiente_candidata`, para repartir entre secciones.
     """
     cfg = client.get_scraper_config() or {}
     if not cfg.get("edicion_auto_activa") and not dry_run:
@@ -315,22 +341,27 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         if objetivo <= 0:
             return {"ok": True, "omitida": "ya se publicó el cupo diario"}
 
-    pool = seleccionar(fusionar_duplicados(candidatos(client)), cfg, limite=objetivo * 2)
-    resumen = {"ok": True, "modo": modo, "objetivo": objetivo, "candidatas": len(pool),
-               "procesadas": 0, "publicadas": 0, "para_revision": 0, "errores": 0, "items": []}
+    ranking = ordenar(fusionar_duplicados(candidatos(client)), cfg)
+    restantes = clasificar_pool(ranking[:MAX_A_CLASIFICAR], cfg)
+    resumen = {"ok": True, "modo": modo, "objetivo": objetivo, "candidatas": len(restantes),
+               "procesadas": 0, "aprobadas": 0, "publicadas": 0, "para_revision": 0, "errores": 0,
+               "por_seccion": {}, "items": []}
 
+    aprobadas_por_seccion: Dict[str, int] = defaultdict(int)
     errores_cuota = 0
-    for g in pool:
-        if auto and resumen["publicadas"] >= objetivo:
-            break
+    while restantes and resumen["aprobadas"] < objetivo and resumen["procesadas"] < objetivo * 2:
+        g = siguiente_candidata(restantes, aprobadas_por_seccion)
+        restantes.remove(g)
         item = {"grupo_id": g["grupo_id"], "titulo": g["notas"][0].get("titulo"), "score": g["score"],
-                "seccion": g["seccion"], "n_fuentes": g["n_fuentes"]}
+                "seccion": g["seccion"], "seccion_scraper": g.get("seccion_scraper"), "n_fuentes": g["n_fuentes"]}
         if dry_run:
+            # Simula que todas pasan los gates para mostrar el reparto previsto.
+            aprobadas_por_seccion[g["seccion"]] += 1
+            resumen["aprobadas"] += 1
+            resumen["procesadas"] += 1
             _log(client, modo, g, "omitida", "dry_run")
             resumen["items"].append({**item, "resultado": "dry_run"})
             continue
-        if not auto and resumen["procesadas"] >= objetivo:
-            break
         ids = [n["id"] for n in g["notas"]]
         # Los textos de las fuentes hay que leerlos ANTES: pipeline_ia pisa el cuerpo de la líder.
         try:
@@ -341,9 +372,8 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         r = {"ok": False, "error": "sin intentar"}
         for _intento in range(2):  # la IA a veces devuelve el JSON incompleto: un reintento
             try:
-                # seccion="": no se pisa la sugerencia de la IA con la etiqueta del scraper, que
-                # manda "Local" para casi todo (deportes nacionales, economía, política).
-                r = procesar(g["grupo_id"], ids, None, "")
+                # Se pasa la sección ya clasificada por tema (igual que cuando la elige el editor).
+                r = procesar(g["grupo_id"], ids, None, g["seccion"])
             except Exception as e:  # una nota no debe frenar la edición
                 logger.exception("Error procesando grupo %s", g["grupo_id"])
                 r = {"ok": False, "error": str(e)[:200]}
@@ -351,6 +381,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
                 break
         if not r.get("ok"):
             resumen["errores"] += 1
+            resumen["procesadas"] += 1
             sin_cuota = "429" in str(r.get("error", "")) or "quota" in str(r.get("error", "")).lower()
             errores_cuota = errores_cuota + 1 if sin_cuota else 0
             _log(client, modo, g, "error", r.get("error", ""))
@@ -381,22 +412,32 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         motivo = f"{motivo_hechos} | {motivo_img}"
         aprobada = img_ok and hechos_ok
 
-        if auto and aprobada:
-            ok_pub, detalle = publicar_en_portal(noticia_id)
-            if ok_pub:
-                resumen["publicadas"] += 1
-                client.client.table("noticias").update(
-                    {"score": g["score"], "auto_motivo": f"publicada automaticamente | {motivo}"[:500]}
-                ).eq("id", noticia_id).execute()
-                _log(client, modo, g, "publicada", motivo=motivo, noticia_id=noticia_id)
-                resumen["items"].append({**item, "resultado": "publicada"})
-                continue
-            motivo = f"{motivo} | publicacion fallida: {detalle}"
+        if aprobada:
+            if auto:
+                ok_pub, detalle = publicar_en_portal(noticia_id)
+                if ok_pub:
+                    resumen["publicadas"] += 1
+                    resumen["aprobadas"] += 1
+                    aprobadas_por_seccion[g["seccion"]] += 1
+                    client.client.table("noticias").update(
+                        {"score": g["score"], "auto_motivo": f"publicada automaticamente | {motivo}"[:500]}
+                    ).eq("id", noticia_id).execute()
+                    _log(client, modo, g, "publicada", motivo=motivo, noticia_id=noticia_id)
+                    resumen["items"].append({**item, "resultado": "publicada"})
+                    continue
+                motivo = f"{motivo} | publicacion fallida: {detalle}"
+            else:
+                # Modo sombra: se cuenta como si se hubiera publicado, para ver el reparto real.
+                resumen["aprobadas"] += 1
+                aprobadas_por_seccion[g["seccion"]] += 1
+                motivo = f"{motivo} | APROBADA (modo sombra: se habria publicado)"
 
-        resumen["para_revision"] += 1
+        resumen["para_revision"] += 0 if (aprobada and not auto) else 1
         client.client.table("noticias").update(
             {"score": g["score"], "auto_motivo": f"pendiente de revision | {motivo}"[:500]}
         ).eq("id", noticia_id).execute()
         _log(client, modo, g, "procesada", motivo=motivo, noticia_id=noticia_id)
-        resumen["items"].append({**item, "resultado": "revision", "motivo": motivo})
+        resumen["items"].append({**item, "resultado": "aprobada_sombra" if aprobada and not auto else "revision",
+                                 "motivo": motivo})
+    resumen["por_seccion"] = dict(aprobadas_por_seccion)
     return resumen

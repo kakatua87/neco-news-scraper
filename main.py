@@ -723,6 +723,20 @@ def edicion_matutina(dry_run: bool = False, solo_si_no_corrio: bool = False) -> 
     if not _EDICION_LOCK.acquire(blocking=False):
         return {"ok": False, "error": "ya hay una edición en curso"}
 
+    terminada = _threading.Event()
+
+    def _mantener_despierto() -> None:
+        # Render free duerme el servicio tras ~15 min sin tráfico entrante y la edición tarda ~25.
+        # Pegarle a la URL pública cuenta como tráfico, así que no depende de ningún disparador externo.
+        url = (os.getenv("RENDER_EXTERNAL_URL") or config.SCRAPER_URL or "").rstrip("/")
+        if not url.startswith("http") or "localhost" in url:
+            return
+        while not terminada.wait(240):
+            try:
+                requests.get(f"{url}/health", timeout=20)
+            except Exception:
+                logger.warning("Autoping a %s/health falló", url)
+
     def _correr() -> None:
         try:
             resumen = edicion_auto.ejecutar_edicion(SupabaseNewsClient(), pipeline_ia)
@@ -730,7 +744,10 @@ def edicion_matutina(dry_run: bool = False, solo_si_no_corrio: bool = False) -> 
         except Exception:
             logger.exception("Error en la edición matutina")
         finally:
+            terminada.set()
             _EDICION_LOCK.release()
+
+    _threading.Thread(target=_mantener_despierto, name="edicion-autoping", daemon=True).start()
 
     threading.Thread(target=_correr, name="edicion-matutina", daemon=True).start()
     return {"ok": True, "iniciada": True}

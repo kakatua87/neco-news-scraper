@@ -1,11 +1,17 @@
 name: Edición matutina
 
-# Despierta el servicio de Render (el free tier se duerme) y dispara el ranking
-# + procesado con IA del top de la mañana. Fase 0: deja todo en 'pendiente'.
+# Despierta el servicio de Render (el free tier se duerme) y dispara el ranking + procesado con IA
+# del top de la mañana. El servidor corre la edición en segundo plano (~25 min).
+#
+# GitHub demora los crons programados (el 16/10 salió 4,5 h tarde) y puede saltearlos, sobre todo
+# en minutos "redondos". Por eso hay tres disparos escalonados a horas poco usadas: el servidor
+# omite los de respaldo si la edición de hoy ya corrió (`solo_si_no_corrio`).
 
 on:
   schedule:
-    - cron: "0 10 * * *"   # ~07:00 ART
+    - cron: "7 9 * * *"     # ~06:07 ART (principal: deja margen por la demora de GitHub)
+    - cron: "41 10 * * *"   # ~07:41 ART (respaldo)
+    - cron: "53 12 * * *"   # ~09:53 ART (respaldo)
   workflow_dispatch:
     inputs:
       dry_run:
@@ -16,22 +22,23 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - name: Warm-up
         run: curl -fsS --retry 6 --retry-delay 15 --max-time 120 "${{ secrets.SCRAPER_URL }}/health"
 
       - name: Ejecutar edición
         run: |
-          curl -fsS --max-time 900 -X POST \
+          curl -fsS --max-time 120 -X POST \
             -H "Authorization: Bearer ${{ secrets.INTERNAL_API_SECRET }}" \
-            "${{ secrets.SCRAPER_URL }}/edicion-matutina?dry_run=${{ inputs.dry_run || false }}"
+            "${{ secrets.SCRAPER_URL }}/edicion-matutina?dry_run=${{ inputs.dry_run || false }}&solo_si_no_corrio=${{ github.event_name == 'schedule' }}"
 
-      # La edición corre en segundo plano en el servidor (tarda varios minutos). Se mantiene
-      # despierto el servicio con pings para que el free tier de Render no lo duerma a mitad.
+      # La edición corre en segundo plano en el servidor. Se mantiene despierto el servicio con pings
+      # para que el free tier de Render no lo duerma a mitad (tiene que durar menos que timeout-minutes).
       - name: Mantener despierto mientras corre
+        if: ${{ !inputs.dry_run }}
         run: |
-          for i in $(seq 1 25); do
+          for i in $(seq 1 35); do
             sleep 60
             curl -fsS --max-time 30 "${{ secrets.SCRAPER_URL }}/health" >/dev/null || true
           done

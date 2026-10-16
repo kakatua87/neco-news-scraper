@@ -695,7 +695,7 @@ _EDICION_LOCK = _threading.Lock()
 
 
 @app.post("/edicion-matutina", dependencies=[Depends(require_internal_secret)])
-def edicion_matutina(dry_run: bool = False) -> Dict:
+def edicion_matutina(dry_run: bool = False, solo_si_no_corrio: bool = False) -> Dict:
     """
     Edición matutina: rankea los grupos raw recientes, procesa el top N con IA, pasa los
     gates y (si `edicion_auto_publicar`) publica. El resultado queda en `edicion_log`.
@@ -711,6 +711,14 @@ def edicion_matutina(dry_run: bool = False) -> Dict:
     except Exception as e:
         logger.exception("Error en /edicion-matutina")
         return {"ok": False, "error": str(e)}
+
+    # Disparos de respaldo programados: si la edición de hoy ya salió, no se repite.
+    if solo_si_no_corrio:
+        try:
+            if edicion_auto.ya_corrio_hoy(client):
+                return {"ok": True, "omitida": "la edición de hoy ya corrió"}
+        except Exception:
+            logger.exception("No se pudo verificar si la edición ya corrió hoy")
 
     if not _EDICION_LOCK.acquire(blocking=False):
         return {"ok": False, "error": "ya hay una edición en curso"}

@@ -85,12 +85,26 @@ def _quitar_fechas_cercanas(texto: str, ventana_dias: int = 7) -> str:
     return re.sub(r"\b\d{1,2}[:.]\d{2}\b(?:\s*hs?\.?)?|\b\d{1,2}\s*(?:hs|horas)\b|\ba las \d{1,2}\b", " ", sin_fechas)
 
 
+_NUMEROS_EN_PALABRAS = {
+    "diez": "10", "once": "11", "doce": "12", "trece": "13", "catorce": "14", "quince": "15",
+    "dieciseis": "16", "diecisiete": "17", "dieciocho": "18", "diecinueve": "19", "veinte": "20",
+    "treinta": "30", "cuarenta": "40", "cincuenta": "50", "sesenta": "60", "setenta": "70",
+    "ochenta": "80", "noventa": "90", "cien": "100", "ciento": "100",
+}
+
+
+def _numeros_en_palabras(texto_norm: str) -> set:
+    """La fuente puede decir 'cuarenta' y la nota '40': eso está respaldado."""
+    return {v for p, v in _NUMEROS_EN_PALABRAS.items() if re.search(r"\b" + p + r"\b", texto_norm)}
+
+
 def _numeros(texto: str) -> set:
     """Cifras normalizadas sin separadores ('1.200' -> '1200'); ignora dígitos sueltos."""
     out = set()
     for m in re.findall(r"\d+(?:[.,]\d+)*", texto or ""):
         limpio = re.sub(r"[.,]", "", m)
-        if len(limpio) >= 2:
+        # Se ignoran los ceros sueltos ('00' de '10:00') y el año en curso (fechas relativas).
+        if len(limpio) >= 2 and set(limpio) != {"0"} and limpio != str(_hoy_ar().year):
             out.add(limpio)
     return out
 
@@ -112,7 +126,7 @@ def chequeo_determinista(titulo: str, cuerpo: str, fuentes: List[str]) -> Dict:
     nota = f"{titulo}\n{cuerpo}"
     base = "\n".join(fuentes)
     base_norm = _norm(base)
-    nums_fuente = _numeros(base)
+    nums_fuente = _numeros(base) | _numeros_en_palabras(base_norm)
     cifras = sorted(n for n in _numeros(_quitar_fechas_cercanas(nota)) if n not in nums_fuente)
     # Se compara por raíz de 5 letras: "instrucción"/"instrucciones", "unidad"/"unidades".
     raices_fuente = {w[:5] for w in re.findall(r"[a-z0-9]+", base_norm)}

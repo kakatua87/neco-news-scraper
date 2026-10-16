@@ -249,6 +249,22 @@ def publicar_en_portal(noticia_id: str) -> Tuple[bool, str]:
         return False, f"portal inaccesible: {str(e)[:150]}"
 
 
+def ya_corrio_hoy(client) -> bool:
+    """
+    True si la edición de hoy (día argentino) ya procesó o publicó notas. Permite disparar la
+    edición varias veces por la mañana como respaldo (los crons de GitHub Actions se demoran
+    horas a veces) sin que se repita. Una corrida que solo dio errores no cuenta.
+    """
+    ahora_ar = datetime.now(timezone.utc) - timedelta(hours=3)
+    inicio_utc = ahora_ar.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=3)
+    resp = (
+        client.client.table("edicion_log").select("id", count="exact")
+        .in_("resultado", ["procesada", "publicada"]).gte("ejecutado_at", inicio_utc.isoformat())
+        .limit(1).execute()
+    )
+    return (resp.count or 0) > 0
+
+
 def publicadas_hoy(client) -> int:
     """Notas que la edición ya publicó hoy (día argentino): evita pasarse si se reejecuta."""
     ahora_ar = datetime.now(timezone.utc) - timedelta(hours=3)

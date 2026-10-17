@@ -480,6 +480,39 @@ def pipeline_scraping() -> None:
 
 # ─── FASE 2: Pipeline de IA (bajo demanda) ───────────────────────
 
+MAX_FOTOS_POR_NOTA = 6
+
+
+def _guardar_fotos_de_fuentes(supabase_client, noticia_id: str, notas: List[Dict]) -> None:
+    """
+    Sube a Storage la foto de cada fuente de la nota (sin repetir las idénticas) y la deja en
+    `noticias.imagenes_fuentes`: [{"fuente", "url", "con_logo"}]. Se guarda aunque haya una sola
+    foto: la pantalla de Pendientes solo muestra el selector cuando hay dos o más.
+    """
+    from image_handler import ImageHandler, con_logo_del_medio
+
+    handler = ImageHandler(supabase_client)
+    vistas_url, vistas_hash = set(), set()
+    fotos: List[Dict] = []
+    for n in notas:
+        origen = n.get("imagen_url")
+        if not origen or origen in vistas_url:
+            continue
+        vistas_url.add(origen)
+        if len(fotos) >= MAX_FOTOS_POR_NOTA:
+            break
+        subida = handler.upload_alternativa(origen, noticia_id, len(fotos))
+        if not subida:
+            continue
+        url, huella = subida
+        if huella in vistas_hash:
+            continue
+        vistas_hash.add(huella)
+        fotos.append({"fuente": n.get("fuente") or "", "url": url, "con_logo": con_logo_del_medio(origen)})
+    if fotos:
+        supabase_client.update_imagenes_fuentes(noticia_id, fotos)
+
+
 def pipeline_ia(
     grupo_id: str,
     fuentes_ids: List[str],
@@ -592,6 +625,12 @@ def pipeline_ia(
                 logger.info("Imagen subida a Storage: %s", nueva_url[:80])
         except Exception:
             logger.warning("No se pudo subir imagen para id=%s. Usando URL original.", noticia_id)
+
+    # Fotos de cada fuente (ya en Storage) para que el editor elija desde Pendientes cuando hay más de una.
+    try:
+        _guardar_fotos_de_fuentes(supabase_client, noticia_id, notas)
+    except Exception:
+        logger.exception("No se pudieron guardar las fotos por fuente de id=%s", noticia_id)
 
     # Descartar notas raw secundarias del grupo
     supabase_client.delete_notas_raw_del_grupo(grupo_id, excepto_id=noticia_id)

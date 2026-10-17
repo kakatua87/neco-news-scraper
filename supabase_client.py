@@ -105,6 +105,16 @@ class SupabaseNewsClient:
         except Exception:
             logger.exception("Error actualizando imagen para id=%s", noticia_id)
 
+    def update_imagenes_fuentes(self, noticia_id: str, imagenes: list) -> None:
+        """Guarda las fotos de cada fuente de la nota (ya en Storage) para elegirlas desde Pendientes."""
+        try:
+            self.client.table("noticias") \
+                .update({"imagenes_fuentes": imagenes}) \
+                .eq("id", noticia_id) \
+                .execute()
+        except Exception:
+            logger.exception("No se pudieron guardar las fotos por fuente de id=%s", noticia_id)
+
     def update_estado(self, noticia_id: int, estado: str) -> None:
         """Actualiza el estado de una noticia (publicada, descartada, etc.)."""
         update_data = {"estado": estado}

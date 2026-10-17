@@ -264,7 +264,29 @@ def publicar_en_portal(noticia_id: str) -> Tuple[bool, str]:
     try:
         r = requests.post(
             f"{config.PORTAL_URL.rstrip('/')}/api/publicar",
-            json={"id": noticia_id},
+            # sinPush: la edición manda un único push resumen al final (ver enviar_push_resumen).
+            json={"id": noticia_id, "sinPush": True},
+            headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
+            timeout=30,
+        )
+        if r.status_code == 200 and r.json().get("ok"):
+            return True, "ok"
+        return False, f"portal {r.status_code}: {r.text[:150]}"
+    except Exception as e:
+        return False, f"portal inaccesible: {str(e)[:150]}"
+
+
+def enviar_push_resumen(ids: List[str]) -> Tuple[bool, str]:
+    """Un solo push a los suscriptores con la nota principal (la primera) y la cantidad publicada."""
+    import requests
+    import config
+
+    if not ids or not config.INTERNAL_API_SECRET:
+        return False, "sin notas o sin secreto"
+    try:
+        r = requests.post(
+            f"{config.PORTAL_URL.rstrip('/')}/api/push/resumen",
+            json={"ids": ids},
             headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
             timeout=30,
         )
@@ -348,6 +370,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
                "por_seccion": {}, "items": []}
 
     aprobadas_por_seccion: Dict[str, int] = defaultdict(int)
+    publicadas_ids: List[str] = []
     errores_cuota = 0
     while restantes and resumen["aprobadas"] < objetivo and resumen["procesadas"] < objetivo * 2:
         g = siguiente_candidata(restantes, aprobadas_por_seccion)
@@ -416,6 +439,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
             if auto:
                 ok_pub, detalle = publicar_en_portal(noticia_id)
                 if ok_pub:
+                    publicadas_ids.append(noticia_id)
                     resumen["publicadas"] += 1
                     resumen["aprobadas"] += 1
                     aprobadas_por_seccion[g["seccion"]] += 1
@@ -440,4 +464,13 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         resumen["items"].append({**item, "resultado": "aprobada_sombra" if aprobada and not auto else "revision",
                                  "motivo": motivo})
     resumen["por_seccion"] = dict(aprobadas_por_seccion)
+    # Un solo push con lo publicado (también si el bucle se cortó por cuota). Si falla no afecta lo ya publicado.
+    if publicadas_ids:
+        try:
+            ok_push, detalle_push = enviar_push_resumen(publicadas_ids)
+        except Exception as e:
+            ok_push, detalle_push = False, str(e)[:150]
+        resumen["push_resumen"] = "ok" if ok_push else f"error: {detalle_push}"
+        if not ok_push:
+            logger.warning("Push resumen no enviado: %s", detalle_push)
     return resumen

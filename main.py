@@ -86,7 +86,13 @@ def _es_pagina_bloqueo(texto: str) -> bool:
 
 
 def notify_nuevo_grupo(cantidad_notas: int, seccion: str) -> None:
-    """Avisa al portal (push OneSignal) que hay un grupo nuevo para revisar en /admin."""
+    """
+    Avisa al portal (push OneSignal) que hay un grupo nuevo para revisar en /admin.
+    Desactivado por defecto: el push va a TODOS los suscriptores (lectores incluidos), no solo a
+    la redacción. Se reactiva con NOTIFICAR_NUEVO_GRUPO=true.
+    """
+    if not config.NOTIFICAR_NUEVO_GRUPO:
+        return
     try:
         import portal_client
 

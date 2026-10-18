@@ -193,6 +193,9 @@ AI_DELAY_SECONDS: float = float(os.getenv("AI_DELAY_SECONDS", "2.0"))
 SCHEDULER_INTERVAL_MINUTES: int = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "30"))
 
 # ─── Portal URL (para links en Telegram) ─────────────────────────
+# Push "nuevo grupo de noticias" a los suscriptores del portal: apagado salvo NOTIFICAR_NUEVO_GRUPO=true.
+NOTIFICAR_NUEVO_GRUPO: bool = os.getenv("NOTIFICAR_NUEVO_GRUPO", "false").strip().lower() == "true"
+
 PORTAL_CANONICO = "https://necobeat.com.ar"
 
 

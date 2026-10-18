@@ -1,0 +1,19 @@
+name: Probar portal
+
+# Comprueba que el scraper se autentica contra el portal (necobeat.com.ar). No publica nada:
+# /probar-portal usa un id inexistente. `status` 200 = bien; 401 = la credencial no llega o no coincide.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probar
+        run: |
+          curl -fsS --retry 6 --retry-delay 15 --max-time 120 "${{ secrets.SCRAPER_URL }}/health" >/dev/null
+          curl -fsS --max-time 120 -X POST \
+            -H "Authorization: Bearer ${{ secrets.INTERNAL_API_SECRET }}" \
+            "${{ secrets.SCRAPER_URL }}/probar-portal" | python3 -m json.tool

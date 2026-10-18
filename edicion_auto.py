@@ -256,43 +256,33 @@ def publicar_en_portal(noticia_id: str) -> Tuple[bool, str]:
     Publica vía /api/publicar del portal (mismo camino que el botón del admin: estado,
     fecha, push OneSignal, kit de Instagram y recálculo de la portada por trigger SQL).
     """
-    import requests
     import config
+    import portal_client
 
     if not config.INTERNAL_API_SECRET:
         return False, "INTERNAL_API_SECRET no configurado"
     try:
-        r = requests.post(
-            f"{config.PORTAL_URL.rstrip('/')}/api/publicar",
-            # sinPush: la edición manda un único push resumen al final (ver enviar_push_resumen).
-            json={"id": noticia_id, "sinPush": True},
-            headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
-            timeout=30,
-        )
+        # sinPush: la edición manda un único push resumen al final (ver enviar_push_resumen).
+        r, url = portal_client.post_portal("/api/publicar", {"id": noticia_id, "sinPush": True})
         if r.status_code == 200 and r.json().get("ok"):
             return True, "ok"
-        return False, f"portal {r.status_code}: {r.text[:150]}"
+        return False, f"portal {r.status_code} ({url}): {r.text[:150]}"
     except Exception as e:
         return False, f"portal inaccesible: {str(e)[:150]}"
 
 
 def enviar_push_resumen(ids: List[str]) -> Tuple[bool, str]:
     """Un solo push a los suscriptores con la nota principal (la primera) y la cantidad publicada."""
-    import requests
     import config
+    import portal_client
 
     if not ids or not config.INTERNAL_API_SECRET:
         return False, "sin notas o sin secreto"
     try:
-        r = requests.post(
-            f"{config.PORTAL_URL.rstrip('/')}/api/push/resumen",
-            json={"ids": ids},
-            headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
-            timeout=30,
-        )
+        r, url = portal_client.post_portal("/api/push/resumen", {"ids": ids})
         if r.status_code == 200 and r.json().get("ok"):
             return True, "ok"
-        return False, f"portal {r.status_code}: {r.text[:150]}"
+        return False, f"portal {r.status_code} ({url}): {r.text[:150]}"
     except Exception as e:
         return False, f"portal inaccesible: {str(e)[:150]}"
 

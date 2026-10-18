@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -192,7 +193,29 @@ AI_DELAY_SECONDS: float = float(os.getenv("AI_DELAY_SECONDS", "2.0"))
 SCHEDULER_INTERVAL_MINUTES: int = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "30"))
 
 # ─── Portal URL (para links en Telegram) ─────────────────────────
-PORTAL_URL: str = os.getenv("PORTAL_URL", "https://necobeat.com.ar").strip()
+PORTAL_CANONICO = "https://necobeat.com.ar"
+
+
+def _normalizar_portal_url(url: str) -> str:
+    """
+    El portal redirige (308) `www.necobeat.com.ar` y los dominios `*.vercel.app` al canónico, y
+    `requests` pierde la cabecera Authorization en esa redirección (el 18/10 las 3 publicaciones
+    automáticas dieron 401 por esto). Se apunta directo al canónico aunque la variable de entorno
+    traiga uno de los dominios con redirección.
+    """
+    url = (url or "").strip()
+    if not url:
+        return PORTAL_CANONICO
+    host = urlparse(url if "://" in url else f"https://{url}").netloc.lower()
+    if host == "www.necobeat.com.ar" or host.endswith(".vercel.app"):
+        logger.warning("PORTAL_URL=%s redirige al portal canónico: se usa %s", url, PORTAL_CANONICO)
+        return PORTAL_CANONICO
+    return url.rstrip("/")
+
+
+# Valor tal cual viene del entorno (para diagnóstico en /probar-portal).
+PORTAL_URL_ORIGINAL: str = os.getenv("PORTAL_URL", "").strip()
+PORTAL_URL: str = _normalizar_portal_url(PORTAL_URL_ORIGINAL)
 ADMIN_URL: str = f"{PORTAL_URL}/admin"
 
 # URL del propio servidor de scraping (Render). El bot la usa para llamar

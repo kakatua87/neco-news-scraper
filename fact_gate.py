@@ -155,6 +155,9 @@ _PROMPT = (
     "IMPORTANTE: la redacción convierte fechas relativas ('este miércoles', 'ayer', 'mañana') en fechas "
     "absolutas usando la fecha de hoy; eso es correcto y NO es un hallazgo mientras sea coherente con la "
     "fecha de hoy indicada abajo. Tampoco es hallazgo que la nota omita datos de la fuente.\n"
+    "El diario es de Necochea: mencionar Necochea, Quequén o la región como lugar de contexto (por ejemplo "
+    "'en Necochea', 'y Quequén') NO es un dato inventado. Sí lo es agregar un lugar concreto distinto "
+    "(otra ciudad, una calle, un barrio) que las fuentes no mencionan.\n"
     "ok=true solo si hallazgos está vacío. No inventes hallazgos."
 )
 

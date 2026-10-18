@@ -88,15 +88,18 @@ def _es_pagina_bloqueo(texto: str) -> bool:
 def notify_nuevo_grupo(cantidad_notas: int, seccion: str) -> None:
     """Avisa al portal (push OneSignal) que hay un grupo nuevo para revisar en /admin."""
     try:
-        requests.post(
-            f"{config.PORTAL_URL}/api/notificaciones/nuevo-grupo",
-            json={
+        import portal_client
+
+        r, url = portal_client.post_portal(
+            "/api/notificaciones/nuevo-grupo",
+            {
                 "titulo": "📰 Nuevo grupo de noticias",
                 "cuerpo_corto": f"{cantidad_notas} fuente(s) nueva(s) en {seccion} para revisar.",
             },
-            headers={"Authorization": f"Bearer {config.INTERNAL_API_SECRET}"},
             timeout=10,
         )
+        if r.status_code != 200:
+            logger.warning("Aviso de nuevo grupo rechazado por el portal: %s (%s)", r.status_code, url)
     except Exception:
         logger.warning("No se pudo notificar nuevo grupo al portal.")
 
@@ -790,6 +793,25 @@ def edicion_matutina(dry_run: bool = False, solo_si_no_corrio: bool = False) -> 
 
     threading.Thread(target=_correr, name="edicion-matutina", daemon=True).start()
     return {"ok": True, "iniciada": True}
+
+
+@app.post("/probar-portal", dependencies=[Depends(require_internal_secret)])
+def probar_portal() -> Dict:
+    """
+    Comprueba que el scraper puede autenticarse contra el portal: llama a /api/publicar con un id
+    inexistente (no publica nada ni manda push). Devuelve la URL configurada y la usada tras las
+    redirecciones; `status` 200 = la credencial llega bien, 401 = no llega o no coincide.
+    """
+    import portal_client
+
+    base = {"portal_url_entorno": config.PORTAL_URL_ORIGINAL or "(vacía)", "portal_url_usada": config.PORTAL_URL}
+    try:
+        r, url = portal_client.post_portal(
+            "/api/publicar", {"id": "00000000-0000-0000-0000-000000000000", "sinPush": True}, timeout=20
+        )
+        return {**base, "ok": r.status_code == 200, "status": r.status_code, "url_final": url, "respuesta": r.text[:120]}
+    except Exception as e:
+        return {**base, "ok": False, "error": str(e)[:200]}
 
 
 @app.post("/verificar-imagen", dependencies=[Depends(require_internal_secret)])

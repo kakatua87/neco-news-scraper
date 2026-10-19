@@ -544,7 +544,9 @@ class AIProcessor:
         )
 
         self.base_url = base_url
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        # Sin timeout propio la librería espera hasta 10 min por llamada: una llamada colgada frenaba
+        # la edición 15 min (hueco visto el 19/10). 75 s alcanza de sobra para redactar una nota.
+        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=75.0, max_retries=1)
 
         key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) >= 12 else "***"
         logger.info(
@@ -575,7 +577,7 @@ class AIProcessor:
         config.gemini_key_agotada(self._fallback_keys[self._key_index])
         self._key_index += 1
         nueva_key = self._fallback_keys[self._key_index]
-        self.client = OpenAI(api_key=nueva_key, base_url=self.base_url)
+        self.client = OpenAI(api_key=nueva_key, base_url=self.base_url, timeout=75.0, max_retries=1)
         logger.warning(
             "Gemini key #%s %s — rotando a key #%s de %s.",
             self._key_index, motivo, self._key_index + 1, len(self._fallback_keys),

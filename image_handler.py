@@ -28,6 +28,49 @@ def con_logo_del_medio(url: Optional[str]) -> bool:
     )
 
 
+def recortar_franja_inferior(datos: bytes) -> Optional[bytes]:
+    """
+    Quita la franja blanca inferior donde algunos medios (TSN Necochea) estampan su logo.
+    Solo corta si, de abajo hacia arriba, hay una banda casi toda blanca que mide entre 3 % y 25 % del
+    alto (se toleran hasta 3 filas de borde en el extremo). Devuelve el JPEG recortado o None si la
+    imagen no tiene ese formato: el control de imagen revisa igual el resultado.
+    """
+    try:
+        with Image.open(io.BytesIO(datos)) as img:
+            img = img.convert("RGB")
+            ancho, alto = img.size
+            px = img.load()
+            muestra = range(0, ancho, 2)
+
+            def fila_blanca(y: int) -> bool:
+                blancos = sum(1 for x in muestra if min(px[x, y]) >= 235)
+                # El logo ocupa parte del ancho de la franja: 75 % de blanco alcanza para contarla.
+                return blancos / len(muestra) >= 0.75
+
+            y = alto - 1
+            borde = 0
+            while y >= 0 and borde < 3 and not fila_blanca(y):
+                y -= 1
+                borde += 1
+            if y < 0 or not fila_blanca(y):
+                return None
+            fin_banda = y
+            while y >= 0 and fila_blanca(y):
+                y -= 1
+            alto_banda = fin_banda - y
+            if alto_banda < max(8, int(alto * 0.03)) or alto_banda > int(alto * 0.25):
+                return None
+            corte = max(1, y - 2)  # margen para la línea de borde entre la foto y la franja
+            if corte < alto * 0.6:
+                return None
+            salida = io.BytesIO()
+            img.crop((0, 0, ancho, corte)).save(salida, format="JPEG", quality=90, optimize=True)
+            return salida.getvalue()
+    except Exception:
+        logger.exception("Error recortando la franja inferior")
+        return None
+
+
 def _sin_metadatos(datos: bytes, content_type: str) -> Optional[bytes]:
     """Re-codifica la imagen para quitar EXIF/IPTC/XMP (créditos, autor, software, GPS) que
     pueden delatar el origen. Los GIF se dejan tal cual para no perder la animación.
@@ -124,6 +167,24 @@ class ImageHandler:
             return self._subir(f"noticias/{noticia_id}.{extension}", contenido, content_type)
         except Exception as e:
             logger.error("Error procesando imagen %s: %s", image_url, e)
+            return None
+
+    def subir_recorte_logo(self, image_url: str, noticia_id: str) -> Optional[str]:
+        """
+        Descarga una imagen (la de Storage de la nota), le recorta la franja inferior con el logo del
+        medio y la sube como `noticias/<id>-recorte.jpg`. Devuelve la URL pública o None.
+        """
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            r = requests.get(image_url, timeout=10, headers=headers)
+            if r.status_code != 200 or not r.headers.get("Content-Type", "").startswith("image/"):
+                return None
+            recortada = recortar_franja_inferior(r.content)
+            if recortada is None:
+                return None
+            return self._subir(f"noticias/{noticia_id}-recorte.jpg", recortada, "image/jpeg")
+        except Exception as e:
+            logger.error("Error subiendo el recorte de %s: %s", image_url, e)
             return None
 
     def upload_alternativa(self, image_url: str, noticia_id: str, indice: int) -> Optional[Tuple[str, str]]:

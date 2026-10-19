@@ -169,11 +169,14 @@ def _llm_json(mensajes: List[Dict], clave: str = "ok", max_tokens: int = 4096) -
     base = config.AI_MODEL if config.AI_PROVIDER == "gemini" else config._PROVIDER_DEFAULTS["gemini"]["model"]
     modelos = [base] + [m for m in config.AI_FALLBACK_MODELS if m != base]
     base_url = config._PROVIDER_DEFAULTS["gemini"]["base_url"]
+    inicio = time.monotonic()  # tope de tiempo total: con Gemini saturado no debe frenar la edición
     for key in keys:
+        if time.monotonic() - inicio > 120:
+            return None
         client = OpenAI(api_key=key, base_url=base_url, timeout=40, max_retries=0)
         key_agotada = False
         for modelo in modelos:
-            if key_agotada:
+            if key_agotada or time.monotonic() - inicio > 120:
                 break
             for _ in range(2):
                 try:

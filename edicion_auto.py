@@ -10,6 +10,7 @@ verificación (fases 1-3).
 import logging
 import math
 import re
+import time
 import unicodedata
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -118,6 +119,26 @@ OBJETIVO_DEFAULT = 1
 TOPE_POR_SECCION = {"Local": 3, "Policiales": 3}
 TOPE_DEFAULT = 2
 MAX_A_CLASIFICAR = 40
+# Tras 3 notas de una sección que no pasan los controles se pasa a otra (el 19/10 seis Locales seguidas
+# agotaron el tope de procesamiento sin probar el resto de las secciones).
+MAX_FALLOS_POR_SECCION = 3
+# Tope de duración de toda la edición: no se empiezan notas nuevas pasado este tiempo.
+MAX_MINUTOS_EDICION = 50
+
+
+_PATRON_ARCHIVO = re.compile(
+    r"archivo hist[oó]rico|efem[eé]rides|^hace \d+ a[nñ]os"
+    r"|^(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\s+\d{1,2}\s+de\s+\w+\s+(de\s+)?\d{4}\s*$",
+    re.IGNORECASE,
+)
+
+
+def es_archivo_historico(titulo: str) -> bool:
+    """
+    Retrospectivas de hace décadas que publican algunos medios ("Sábado 19 de octubre 1996",
+    "Archivo Histórico…"): no son noticias y consumían cupo de la edición.
+    """
+    return bool(_PATRON_ARCHIVO.search((titulo or "").strip()))
 
 
 def ordenar(cands: List[Dict], cfg: Dict) -> List[Dict]:
@@ -128,7 +149,15 @@ def ordenar(cands: List[Dict], cfg: Dict) -> List[Dict]:
         g["seccion"] = g["notas"][0].get("seccion") or "Local"
         g["n_fuentes"] = _n_fuentes(g["notas"])
         g["score"] = puntuar(g, pesos)
-    return sorted((g for g in cands if g["seccion"] not in excluidas), key=lambda g: g["score"], reverse=True)
+    return sorted(
+        (
+            g for g in cands
+            if g["seccion"] not in excluidas
+            and not any(es_archivo_historico(n.get("titulo", "")) for n in g["notas"])
+        ),
+        key=lambda g: g["score"],
+        reverse=True,
+    )
 
 
 def clasificar_pool(pool: List[Dict], cfg: Dict) -> List[Dict]:
@@ -189,6 +218,27 @@ def _con_logo_del_medio(url: Optional[str]) -> bool:
     return bool(d) and any(d == x or d.endswith("." + x) for x in config.IMAGEN_DOMINIOS_CON_LOGO)
 
 
+def _rescatar_foto_con_logo(client, noticia_id: str, url_actual: Optional[str]) -> Optional[str]:
+    """
+    Última salida cuando la única foto es de un medio que estampa su logo (TSN): recorta la franja
+    inferior, sube el recorte y lo pasa por el control de imagen con doble revisión. Si queda limpia se
+    usa; si no, devuelve None y la nota va a revisión como antes.
+    """
+    import image_gate
+    from image_handler import ImageHandler
+
+    if not url_actual:
+        return None
+    nueva = ImageHandler(client).subir_recorte_logo(url_actual, noticia_id)
+    if not nueva:
+        return None
+    elegida = image_gate.elegir_imagen_limpia([nueva], doble_revision=True)
+    if elegida["url"] is None:
+        return None
+    client.update_imagen(noticia_id, nueva)
+    return "imagen: recortada (se quitó la franja con el logo del medio)"
+
+
 def verificar_imagen_nota(client, noticia_id: str, g: Dict) -> Tuple[bool, str]:
     """
     Image gate: devuelve (apta, motivo para `auto_motivo`).
@@ -214,7 +264,14 @@ def verificar_imagen_nota(client, noticia_id: str, g: Dict) -> Tuple[bool, str]:
     if not [c for c in candidatas if c]:
         if actual_con_logo or any(_con_logo_del_medio(u) for u in originales):
             dom = _dominio(original_lider or (originales[0] if originales else ""))
-            return False, f"imagen: la única foto disponible es de {dom} y lleva su logo"
+            try:
+                rescate = _rescatar_foto_con_logo(client, noticia_id, actual)
+            except Exception:
+                logger.exception("Recorte del logo falló para %s", noticia_id)
+                rescate = None
+            if rescate:
+                return True, rescate
+            return False, f"imagen: la única foto disponible es de {dom} y lleva su logo (el recorte no alcanzó)"
         return False, "imagen: sin foto disponible"
 
     elegida = image_gate.elegir_imagen_limpia(candidatas, doble_revision=doble)
@@ -363,9 +420,18 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
                "por_seccion": {}, "items": []}
 
     aprobadas_por_seccion: Dict[str, int] = defaultdict(int)
+    fallos_por_seccion: Dict[str, int] = defaultdict(int)
     publicadas_ids: List[str] = []
     errores_cuota = 0
+    inicio = time.monotonic()
     while restantes and resumen["aprobadas"] < objetivo and resumen["procesadas"] < objetivo * 2:
+        if time.monotonic() - inicio > MAX_MINUTOS_EDICION * 60:
+            logger.warning("Edición cortada por tiempo (%s min)", MAX_MINUTOS_EDICION)
+            resumen["cortada_por_tiempo"] = True
+            break
+        restantes = [g for g in restantes if fallos_por_seccion[g["seccion"]] < MAX_FALLOS_POR_SECCION]
+        if not restantes:
+            break
         g = siguiente_candidata(restantes, aprobadas_por_seccion)
         restantes.remove(g)
         item = {"grupo_id": g["grupo_id"], "titulo": g["notas"][0].get("titulo"), "score": g["score"],
@@ -449,6 +515,9 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
                 aprobadas_por_seccion[g["seccion"]] += 1
                 motivo = f"{motivo} | APROBADA (modo sombra: se habria publicado)"
 
+        # Llegar acá en modo auto con la nota aprobada significa que la publicación falló; cuenta como fallo.
+        if not (aprobada and not auto):
+            fallos_por_seccion[g["seccion"]] += 1
         resumen["para_revision"] += 0 if (aprobada and not auto) else 1
         client.client.table("noticias").update(
             {"score": g["score"], "auto_motivo": f"pendiente de revision | {motivo}"[:500]}
@@ -457,6 +526,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         resumen["items"].append({**item, "resultado": "aprobada_sombra" if aprobada and not auto else "revision",
                                  "motivo": motivo})
     resumen["por_seccion"] = dict(aprobadas_por_seccion)
+    resumen["fallos_por_seccion"] = dict(fallos_por_seccion)
     # Un solo push con lo publicado (también si el bucle se cortó por cuota). Si falla no afecta lo ya publicado.
     if publicadas_ids:
         try:

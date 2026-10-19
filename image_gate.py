@@ -29,6 +29,8 @@ _UA = (
 )
 _MAX_BYTES = 5_000_000
 _LADO_MAX = 1024
+# Tope de tiempo por análisis: con Gemini saturado, keys x modelos x reintentos podía sumar minutos.
+PRESUPUESTO_S = 90
 
 _PROMPT = (
     "Sos un editor gráfico de un diario. Mirá la imagen y respondé SOLO un JSON con estas claves:\n"
@@ -133,10 +135,17 @@ def diagnosticar_imagen(url: str, revision_bordes: bool = False) -> Dict:
     }]
     base_url = config._PROVIDER_DEFAULTS["gemini"]["base_url"]
     ultimo_error = "sin respuesta"
+    inicio = time.monotonic()
     for key in keys:
+        if time.monotonic() - inicio > PRESUPUESTO_S:
+            ultimo_error = "tiempo agotado"
+            break
         key_agotada = False
         client = OpenAI(api_key=key, base_url=base_url, timeout=25, max_retries=0)
         for modelo in _modelos():
+            if time.monotonic() - inicio > PRESUPUESTO_S:
+                ultimo_error = "tiempo agotado"
+                break
             for intento in range(2):  # 503 "high demand" suele ser transitorio
                 try:
                     resp = client.chat.completions.create(

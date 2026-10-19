@@ -221,8 +221,13 @@ def evaluar_nota(titulo: str, cuerpo: str, fuentes: List[str], seccion: str = ""
     # solo los chequeos de respaldo contra las fuentes.
 
     det = chequeo_determinista(titulo, cuerpo, fuentes)
+    # Decisión editorial: las fuentes son medios que ya verificaron sus datos, así que una cifra que la
+    # redacción deriva o reformatea (años, "60 años" -> 1966, horarios) NO bloquea la publicación. Queda
+    # como aviso visible para el editor. Lo que sí bloquea es lo que el verificador (LLM) detecta al
+    # contrastar con la fuente, que incluye cifras que contradicen o no están en ella.
+    avisos: List[str] = []
     if det["cifras_no_respaldadas"]:
-        motivos.append("cifras sin respaldo: " + ", ".join(det["cifras_no_respaldadas"][:5]))
+        avisos.append("cifras no halladas en la fuente: " + ", ".join(det["cifras_no_respaldadas"][:5]))
     if len(det["nombres_no_respaldados"]) >= 3:
         motivos.append("nombres sin respaldo: " + ", ".join(det["nombres_no_respaldados"][:5]))
 
@@ -234,4 +239,4 @@ def evaluar_nota(titulo: str, cuerpo: str, fuentes: List[str], seccion: str = ""
         resumen = "; ".join(f"{x.get('tipo', '?')}: {str(x.get('texto', ''))[:60]}" for x in h[:3])
         motivos.append("verificador: " + (resumen or "no respaldada"))
 
-    return {"automatica": not motivos, "motivos": motivos, "determinista": det, "llm": llm}
+    return {"automatica": not motivos, "motivos": motivos, "avisos": avisos, "determinista": det, "llm": llm}

@@ -246,9 +246,12 @@ def verificar_hechos_nota(client, noticia_id: str, g: Dict, textos_fuente: List[
         fila.get("titulo", ""), fila.get("cuerpo", ""), textos_fuente,
         seccion=fila.get("seccion") or g["seccion"], n_fuentes=g["n_fuentes"],
     )
+    # Los avisos (p. ej. cifras que la redacción derivó y no están literales en la fuente) no bloquean,
+    # pero quedan escritos para que el editor los vea en Pendientes.
+    aviso = "".join(f" | aviso: {a}" for a in ev.get("avisos", []))
     if ev["automatica"]:
-        return True, "hechos: verificados"
-    return False, "hechos: " + "; ".join(ev["motivos"])
+        return True, "hechos: verificados" + aviso
+    return False, "hechos: " + "; ".join(ev["motivos"]) + aviso
 
 
 def publicar_en_portal(noticia_id: str) -> Tuple[bool, str]:

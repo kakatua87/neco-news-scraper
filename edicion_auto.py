@@ -480,6 +480,16 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
 
         resumen["procesadas"] += 1
         noticia_id = r["noticia_id"]
+        # pipeline_ia pisó el cuerpo de la líder: se guarda el texto original de las fuentes para poder
+        # contrastar la nota después (rutina de revisión de pendientes). Columna oculta al público.
+        try:
+            texto = "\n\n".join(
+                f"--- FUENTE {i + 1} ---\n{t[:3500]}" for i, t in enumerate(textos_fuente) if t and t.strip()
+            )
+            if texto:
+                client.client.table("noticias").update({"texto_fuentes": texto[:12000]}).eq("id", noticia_id).execute()
+        except Exception:
+            logger.exception("No se pudo guardar el texto de las fuentes de %s", noticia_id)
         # Las notas de grupos fusionados quedan raw si no se las descarta.
         sobrantes = [i for i in ids if i != noticia_id]
         if sobrantes:

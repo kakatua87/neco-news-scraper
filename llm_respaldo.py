@@ -19,7 +19,7 @@ logger = logging.getLogger("neconews.llm_respaldo")
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_MODELO_TEXTO = os.getenv("GROQ_MODEL_TEXTO", "openai/gpt-oss-120b")
-GROQ_MODELO_VISION = os.getenv("GROQ_MODEL_VISION", "meta-llama/llama-4-scout-17b-16e-instruct")
+GROQ_MODELO_VISION = os.getenv("GROQ_MODEL_VISION", "qwen/qwen3.8-27b")
 CLAUDE_MODELO = os.getenv("ANTHROPIC_VERIFICADOR_MODEL", "claude-haiku-5-5")
 PRESUPUESTO_S = 90
 

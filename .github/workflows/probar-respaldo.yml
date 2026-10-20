@@ -1,0 +1,19 @@
+name: Probar respaldo
+
+# Comprueba los respaldos de los controles (Groq y Claude) con una consulta mínima. No toca notas.
+# Muestra por proveedor: clave_cargada, texto_ok y vision_ok.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probar
+        run: |
+          curl -fsS --retry 6 --retry-delay 15 --max-time 120 "${{ secrets.SCRAPER_URL }}/health" >/dev/null
+          curl -fsS --max-time 180 -X POST \
+            -H "Authorization: Bearer ${{ secrets.INTERNAL_API_SECRET }}" \
+            "${{ secrets.SCRAPER_URL }}/probar-respaldo" | python3 -m json.tool

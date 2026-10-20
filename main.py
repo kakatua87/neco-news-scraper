@@ -820,6 +820,52 @@ def probar_portal() -> Dict:
         return {**base, "ok": False, "error": str(e)[:200]}
 
 
+@app.post("/probar-respaldo", dependencies=[Depends(require_internal_secret)])
+def probar_respaldo() -> Dict:
+    """
+    Comprueba los respaldos de los controles (Groq y Claude) con una consulta mínima, sin tocar notas.
+    Devuelve, por proveedor, si hay clave cargada y si respondió (texto y visión). No expone las claves.
+    """
+    import base64
+    import io
+    import os
+
+    from PIL import Image
+
+    import llm_respaldo
+
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), (200, 30, 30)).save(buf, format="JPEG")
+    imagen = base64.b64encode(buf.getvalue()).decode()
+    texto = [{"role": "user", "content": 'Respondé SOLO con este JSON: {"ok": true}'}]
+    vision = [{"role": "user", "content": [
+        {"type": "text", "text": 'La imagen tiene texto o logo? Respondé SOLO JSON: {"marca_agua": false}'},
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{imagen}"}},
+    ]}]
+
+    def probar(fn, mensajes, clave, **kw) -> bool:
+        try:
+            return fn(mensajes, clave, 200, **kw) is not None
+        except Exception:
+            return False
+
+    return {
+        "groq": {
+            "clave_cargada": bool(os.getenv("GROQ_API_KEY", "").strip()),
+            "modelo_texto": llm_respaldo.GROQ_MODELO_TEXTO,
+            "texto_ok": probar(llm_respaldo._con_groq, texto, "ok", vision=False),
+            "modelo_vision": llm_respaldo.GROQ_MODELO_VISION,
+            "vision_ok": probar(llm_respaldo._con_groq, vision, "marca_agua", vision=True),
+        },
+        "claude": {
+            "clave_cargada": bool(os.getenv("ANTHROPIC_API_KEY", "").strip()),
+            "modelo": llm_respaldo.CLAUDE_MODELO,
+            "texto_ok": probar(lambda m, c, t: llm_respaldo._con_claude(m, c, t), texto, "ok"),
+            "vision_ok": probar(lambda m, c, t: llm_respaldo._con_claude(m, c, t), vision, "marca_agua"),
+        },
+    }
+
+
 @app.post("/verificar-imagen", dependencies=[Depends(require_internal_secret)])
 def verificar_imagen(body: Dict) -> Dict:
     # def (no async): corre en el threadpool y no bloquea /health mientras espera a la visión.

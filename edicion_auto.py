@@ -9,6 +9,7 @@ verificación (fases 1-3).
 
 import logging
 import math
+import os
 import re
 import time
 import unicodedata
@@ -264,14 +265,17 @@ def verificar_imagen_nota(client, noticia_id: str, g: Dict) -> Tuple[bool, str]:
     if not [c for c in candidatas if c]:
         if actual_con_logo or any(_con_logo_del_medio(u) for u in originales):
             dom = _dominio(original_lider or (originales[0] if originales else ""))
-            try:
-                rescate = _rescatar_foto_con_logo(client, noticia_id, actual)
-            except Exception:
-                logger.exception("Recorte del logo falló para %s", noticia_id)
-                rescate = None
+            # El recorte del logo del medio queda apagado salvo que se active a propósito: esas fotos
+            # llevan la atribución de su origen y la nota va a revisión del editor.
+            rescate = None
+            if os.getenv("IMAGEN_RECORTAR_LOGO", "").strip().lower() in ("1", "true", "si", "sí"):
+                try:
+                    rescate = _rescatar_foto_con_logo(client, noticia_id, actual)
+                except Exception:
+                    logger.exception("Recorte del logo falló para %s", noticia_id)
             if rescate:
                 return True, rescate
-            return False, f"imagen: la única foto disponible es de {dom} y lleva su logo (el recorte no alcanzó)"
+            return False, f"imagen: la única foto disponible es de {dom} y lleva su logo (elegí otra foto o cargá una propia)"
         return False, "imagen: sin foto disponible"
 
     elegida = image_gate.elegir_imagen_limpia(candidatas, doble_revision=doble)

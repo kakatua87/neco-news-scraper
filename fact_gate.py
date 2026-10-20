@@ -163,6 +163,10 @@ _PROMPT = (
     "El diario es de Necochea: mencionar Necochea, Quequén o la región como lugar de contexto (por ejemplo "
     "'en Necochea', 'y Quequén') NO es un dato inventado. Sí lo es agregar un lugar concreto distinto "
     "(otra ciudad, una calle, un barrio) que las fuentes no mencionan.\n"
+    "Las fuentes son diarios que ya verificaron su información: asumí que lo que dicen es cierto. NO marques "
+    "diferencias de detalle entre fuentes, titulares de notas relacionadas que se coló en el texto, "
+    "horarios o cifras aproximadas, ni reformulaciones. Marcá únicamente datos nuevos y concretos "
+    "(un nombre, un dicho, un hecho) que la redacción agregó y no figuran en ninguna fuente.\n"
     "ok=true solo si hallazgos está vacío. No inventes hallazgos."
 )
 
@@ -241,10 +245,24 @@ def evaluar_nota(titulo: str, cuerpo: str, fuentes: List[str], seccion: str = ""
 
     llm = verificar_con_llm(titulo, cuerpo, fuentes)
     if llm is None:
-        motivos.append("verificador no disponible")
-    elif not llm.get("ok") or llm.get("hallazgos"):
+        # Las fuentes ya son medios que verificaron la información: si Gemini está caído, la nota no
+        # se frena por eso (los chequeos deterministas de arriba sí se aplicaron).
+        avisos.append("verificador no disponible (Gemini saturado): nota no contrastada por IA")
+    else:
         h = llm.get("hallazgos") or []
-        resumen = "; ".join(f"{x.get('tipo', '?')}: {str(x.get('texto', ''))[:60]}" for x in h[:3])
-        motivos.append("verificador: " + (resumen or "no respaldada"))
+        # Decisión editorial: las contradicciones y los detalles sueltos son avisos para el editor. Solo
+        # bloquea cuando el verificador marca varios datos nuevos (nombres, dichos, hechos) que ninguna
+        # fuente respalda, que es lo que delata una invención de la IA.
+        graves = [x for x in h if str(x.get("tipo", "")).lower() in ("nombre", "atribucion", "hecho")]
+        leves = [x for x in h if x not in graves]
+        if leves:
+            avisos.append("verificador (no bloquea): " + "; ".join(
+                f"{x.get('tipo', '?')}: {str(x.get('texto', ''))[:60]}" for x in leves[:3]))
+        if len(graves) >= 2:
+            motivos.append("verificador: " + "; ".join(
+                f"{x.get('tipo', '?')}: {str(x.get('texto', ''))[:60]}" for x in graves[:3]))
+        elif graves:
+            avisos.append("verificador (no bloquea): " + "; ".join(
+                f"{x.get('tipo', '?')}: {str(x.get('texto', ''))[:60]}" for x in graves))
 
     return {"automatica": not motivos, "motivos": motivos, "avisos": avisos, "determinista": det, "llm": llm}

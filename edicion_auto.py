@@ -123,7 +123,7 @@ MAX_A_CLASIFICAR = 40
 # agotaron el tope de procesamiento sin probar el resto de las secciones).
 MAX_FALLOS_POR_SECCION = 3
 # Tope de duración de toda la edición: no se empiezan notas nuevas pasado este tiempo.
-MAX_MINUTOS_EDICION = 50
+MAX_MINUTOS_EDICION = 70
 
 
 _PATRON_ARCHIVO = re.compile(

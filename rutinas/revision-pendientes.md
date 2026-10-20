@@ -15,11 +15,12 @@ Pendientes para el editor.
 > Proyecto Supabase `gjqspmhrnqwavristrpv`. Hacé lo siguiente:
 >
 > 1. Listá las notas de hoy (hora de Argentina, UTC-3) que quedaron en revisión:
->    `select id, titulo, seccion, grupo_id, cuerpo, imagen_url, auto_motivo from noticias
+>    `select id, titulo, seccion, grupo_id, cuerpo, texto_fuentes, imagen_url, auto_motivo from noticias
 >    where estado = 'pendiente' and auto_motivo like 'pendiente de revision%'
 >    and created_at >= date_trunc('day', now() at time zone 'America/Argentina/Buenos_Aires')`.
-> 2. Para cada una, leé los textos de las fuentes: `select fuente, cuerpo from noticias where grupo_id = <grupo_id>
->    and id <> <id> and estado in ('raw','descartada')`. Sin fuentes: veredicto REVISAR ("sin fuentes para contrastar").
+> 2. Fuentes: el texto original está en `texto_fuentes` (bloques `--- FUENTE n ---`; lo guarda la edición desde v12).
+>    Si está vacío, probá con `select fuente, cuerpo from noticias where grupo_id = <grupo_id>
+>    and id <> <id> and estado in ('raw','descartada')`. Sin ninguna fuente: veredicto REVISAR ("sin fuentes para contrastar").
 > 3. Contrastá la nota con las fuentes. Las fuentes son diarios que ya verificaron su información: asumí que lo
 >    que dicen es cierto. Buscá solo: (a) nombres, cargos, dichos o hechos concretos que la nota agrega y ninguna
 >    fuente respalda; (b) texto ajeno colado en el cuerpo (titulares de notas relacionadas, "leé también");
@@ -34,7 +35,7 @@ Pendientes para el editor.
 >    (`estado = 'publicada'` y `fecha_publicacion` de hoy, hora Argentina). Publicá las notas con veredicto OK, de
 >    la de mayor `score` a la menor, mientras el total publicado hoy sea menor que `edicion_max`. Publicar es
 >    exactamente: `update noticias set estado = 'publicada', fecha_publicacion = now() where id = <id> and estado = 'pendiente'`.
->    Después agregá a `auto_motivo` ` | publicada por rutina Claude`. No envíes pushes.
+>    Después agregá a `auto_motivo` ` | publicada por rutina Claude`. No envíes pushes de ningún tipo.
 > 7. Respondé con un resumen: cuántas notas, cuántas publicadas, y cuáles REVISAR con su motivo.
 >
 > No ejecutes ninguna otra escritura.

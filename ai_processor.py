@@ -823,7 +823,13 @@ class AIProcessor:
         modelo_idx = 0
         max_retries += len(self._fallback_models)
 
+        # Tope de tiempo por redacción: con Gemini saturado, rotar keys y modelos con timeouts de
+        # 75 s puede tardar más de 15 minutos en una sola nota y consumir la edición entera.
+        inicio_llamada = time.monotonic()
         for attempt in range(max_retries):
+            if attempt and time.monotonic() - inicio_llamada > 200:
+                logger.warning("Redacción abandonada: pasaron más de 200 s de reintentos")
+                break
             try:
                 response = self.client.chat.completions.create(
                     model=modelos[modelo_idx],

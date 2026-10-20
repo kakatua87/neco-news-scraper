@@ -611,8 +611,19 @@ class NewsScraper:
                 return txt[:1200]
         return ""
 
-    @staticmethod
-    def _extract_image(card: BeautifulSoup, image_selector: str, base_url: str) -> Optional[str]:
+    _PATRON_IMAGEN_VACIA = re.compile(
+        r"jeg-empty|placeholder|spacer|blank\.|/blank|1x1|no[-_]?image|noimage|default[-_]?(?:thumb|image|img)|"
+        r"lazy[-_]?load|loading\.(?:gif|png|svg)|transparent\.(?:gif|png)|pixel\.(?:gif|png)",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _es_imagen_vacia(cls, url: Optional[str]) -> bool:
+        """True si la URL es un marcador de posición (imagen en blanco del tema), no una foto."""
+        return bool(url) and bool(cls._PATRON_IMAGEN_VACIA.search(url))
+
+    @classmethod
+    def _extract_image(cls, card: BeautifulSoup, image_selector: str, base_url: str) -> Optional[str]:
         """Extrae URL de imagen de una card."""
         for sel in image_selector.split(", "):
             el = card.select_one(sel.strip())
@@ -623,12 +634,12 @@ class NewsScraper:
                     or el.get("data-lazy-src")
                     or el.get("data-original")
                 )
-                if raw and not raw.startswith("data:"):
+                if raw and not raw.startswith("data:") and not cls._es_imagen_vacia(raw):
                     return urljoin(base_url, raw)
         return None
 
-    @staticmethod
-    def _extract_og_image(html: str, base_url: str) -> Optional[str]:
+    @classmethod
+    def _extract_og_image(cls, html: str, base_url: str) -> Optional[str]:
         """Extrae la imagen Open Graph del HTML (la imagen principal del artículo)."""
         soup = BeautifulSoup(html, "html.parser")
         for selector in [
@@ -639,7 +650,7 @@ class NewsScraper:
             tag = soup.select_one(selector)
             if tag:
                 src = (tag.get("content") or "").strip()
-                if src and src.startswith("http") and not src.startswith("data:"):
+                if src and src.startswith("http") and not src.startswith("data:") and not cls._es_imagen_vacia(src):
                     return src
         return None
 
@@ -659,7 +670,7 @@ class NewsScraper:
                     img.get("src") or img.get("data-src")
                     or img.get("data-lazy-src") or ""
                 ).strip()
-                if not src or src.startswith("data:"):
+                if not src or src.startswith("data:") or cls._es_imagen_vacia(src):
                     continue
                 # Ignorar imágenes muy pequeñas (iconos, avatares)
                 width = img.get("width", "999")

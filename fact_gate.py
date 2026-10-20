@@ -31,6 +31,11 @@ _NOMBRES_OK = {
     "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre", "lunes",
     "martes", "miercoles", "jueves", "viernes", "sabado", "domingo", "ruta", "calle", "avenida",
     "municipalidad", "municipio", "policia", "segun", "ademas", "tambien", "ante", "sin", "tras",
+    # Términos institucionales: la IA expande siglas (UFI -> Unidad Funcional de Instrucción).
+    "unidad", "funcional", "instruccion", "fiscalia", "juzgado", "camara", "tribunal", "departamento",
+    "judicial", "comando", "patrullas", "comisaria", "seccional", "bomberos", "voluntarios", "hospital",
+    "secretaria", "subsecretaria", "direccion", "defensa", "civil", "provincia", "nacional", "federal",
+    "ministerio", "concejo", "deliberante", "intendente", "gobierno", "penal", "correccional",
 }
 # La cantidad de fuentes NO bloquea la automatización: una nota de fuente única se publica igual
 # si el verificador la respalda (decisión editorial).

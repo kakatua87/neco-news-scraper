@@ -24,6 +24,7 @@ import requests
 from openai import OpenAI
 
 import config
+import llm_respaldo
 
 logger = logging.getLogger("neconews.fact_gate")
 
@@ -174,43 +175,11 @@ _PROMPT = (
 
 
 def _llm_json(mensajes: List[Dict], clave: str = "ok", max_tokens: int = 4096) -> Optional[Dict]:
-    """Gemini primero; si no responde tras sus reintentos, Claude como respaldo (si hay clave)."""
+    """Gemini primero; si no responde, los respaldos (Groq gratis y después Claude, si hay clave)."""
     parsed = _llm_json_gemini(mensajes, clave, max_tokens)
     if parsed is not None:
         return parsed
-    return _llm_json_claude(mensajes, clave, max_tokens)
-
-
-def _llm_json_claude(mensajes: List[Dict], clave: str = "ok", max_tokens: int = 4096) -> Optional[Dict]:
-    """Respaldo con la API de Anthropic. Requiere ANTHROPIC_API_KEY en el entorno; sin ella no hace nada."""
-    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    if not key:
-        return None
-    modelo = os.getenv("ANTHROPIC_VERIFICADOR_MODEL", "claude-haiku-5-5").strip()
-    logger.warning("Gemini no respondió: verifico con Claude (%s)", modelo)
-    for _ in range(2):
-        try:
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json={"model": modelo, "max_tokens": max_tokens, "temperature": 0, "messages": mensajes},
-                timeout=60,
-            )
-            if r.status_code != 200:
-                logger.warning("Claude verificador falló: %s %s", r.status_code, r.text[:150])
-                if r.status_code in (429, 500, 502, 503, 529):
-                    time.sleep(3)
-                    continue
-                return None
-            texto = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
-            m = re.search(r"\{.*\}", texto, re.DOTALL)
-            parsed = json.loads(m.group(0)) if m else None
-            if isinstance(parsed, dict) and clave in parsed:
-                return parsed
-            return None
-        except Exception as e:
-            logger.warning("Claude verificador falló: %s", str(e)[:150])
-    return None
+    return llm_respaldo.completar_json(mensajes, clave, max_tokens)
 
 
 def _llm_json_gemini(mensajes: List[Dict], clave: str = "ok", max_tokens: int = 4096) -> Optional[Dict]:

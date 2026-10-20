@@ -19,6 +19,7 @@ from openai import OpenAI
 from PIL import Image
 
 import config
+import llm_respaldo
 from url_segura import url_es_publica
 
 logger = logging.getLogger("neconews.image_gate")
@@ -170,6 +171,10 @@ def diagnosticar_imagen(url: str, revision_bordes: bool = False) -> Dict:
                     break
             if key_agotada:
                 break
+    # Gemini no pudo: respaldo con Groq (gratis) y después Claude, si hay clave cargada.
+    parsed = llm_respaldo.completar_json(mensajes, "marca_agua", max_tokens=300, vision=True)
+    if parsed is not None:
+        return {"resultado": interpretar(parsed), "error": None}
     return {"resultado": None, "error": ultimo_error}
 
 

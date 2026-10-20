@@ -40,6 +40,8 @@ def _con_groq(mensajes: List[Dict], clave: str, max_tokens: int, vision: bool) -
     if not key:
         return None
     modelo = GROQ_MODELO_VISION if vision else GROQ_MODELO_TEXTO
+    # Plan gratis: 8.000 tokens por minuto. El tope de salida cuenta en el cálculo, así que se acota.
+    max_tokens = min(max_tokens, 1500)
     client = OpenAI(api_key=key, base_url=GROQ_BASE_URL, timeout=40, max_retries=0)
     for _ in range(2):
         try:

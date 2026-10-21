@@ -71,6 +71,44 @@ def recortar_franja_inferior(datos: bytes) -> Optional[bytes]:
         return None
 
 
+def recortar_por_caja(datos: bytes, caja: dict) -> Optional[bytes]:
+    """
+    Quita un logo que está sobre un margen (inferior, superior, derecho o izquierdo, incluidas las esquinas)
+    cortando la foto por el lado que menos superficie pierde. `caja` viene en milésimas (x0,y0,x1,y1).
+    Devuelve None si el logo no está en un margen (centrado) o si el recorte dejaría menos del 65 % de la
+    foto: en esos casos la nota va a revisión como antes.
+    """
+    try:
+        with Image.open(io.BytesIO(datos)) as img:
+            img = img.convert("RGB")
+            ancho, alto = img.size
+            x0, y0, x1, y1 = (caja[k] / 1000 for k in ("x0", "y0", "x1", "y1"))
+            m = 0.015  # margen extra para no dejar el borde del logo
+            # (caja de recorte en fracciones, fracción de superficie que queda)
+            opciones = []
+            if y0 >= 0.70:
+                opciones.append(((0, 0, 1, max(0.0, y0 - m)), max(0.0, y0 - m)))
+            if y1 <= 0.30:
+                opciones.append(((0, min(1.0, y1 + m), 1, 1), 1 - min(1.0, y1 + m)))
+            if x0 >= 0.70:
+                opciones.append(((0, 0, max(0.0, x0 - m), 1), max(0.0, x0 - m)))
+            if x1 <= 0.30:
+                opciones.append(((min(1.0, x1 + m), 0, 1, 1), 1 - min(1.0, x1 + m)))
+            if not opciones:
+                return None
+            fr, resto = max(opciones, key=lambda o: o[1])
+            if resto < 0.65:
+                return None
+            salida = io.BytesIO()
+            img.crop((int(fr[0] * ancho), int(fr[1] * alto), int(fr[2] * ancho), int(fr[3] * alto))).save(
+                salida, format="JPEG", quality=90, optimize=True
+            )
+            return salida.getvalue()
+    except Exception:
+        logger.exception("Error recortando el logo por caja")
+        return None
+
+
 def _sin_metadatos(datos: bytes, content_type: str) -> Optional[bytes]:
     """Re-codifica la imagen para quitar EXIF/IPTC/XMP (créditos, autor, software, GPS) que
     pueden delatar el origen. Los GIF se dejan tal cual para no perder la animación.
@@ -180,6 +218,12 @@ class ImageHandler:
             if r.status_code != 200 or not r.headers.get("Content-Type", "").startswith("image/"):
                 return None
             recortada = recortar_franja_inferior(r.content)
+            if recortada is None:
+                # Sin franja blanca: se ubica el logo con visión y se corta el margen donde esté (esquina o borde).
+                import image_gate
+
+                caja = image_gate.localizar_logo(r.content)
+                recortada = recortar_por_caja(r.content, caja) if caja else None
             if recortada is None:
                 return None
             return self._subir(f"noticias/{noticia_id}-recorte.jpg", recortada, "image/jpeg")

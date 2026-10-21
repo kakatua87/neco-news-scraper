@@ -207,3 +207,54 @@ def elegir_imagen_limpia(candidatas: List[str], doble_revision: bool = False) ->
         if res and res["limpia"]:
             return {"url": url, "indice": i, "detalle": detalle}
     return {"url": None, "indice": None, "detalle": detalle}
+
+
+_PROMPT_LOGO = (
+    "Sos un editor gráfico. Buscá en la imagen el logo, marca de agua o nombre de un medio de comunicación. "
+    "Respondé SOLO un JSON: "
+    '{"hay_logo": bool, "x0": int, "y0": int, "x1": int, "y1": int}\n'
+    "Las coordenadas son la caja que encierra TODO el logo o marca, en milésimas del ancho y del alto de la "
+    "imagen (0 = borde izquierdo/superior, 1000 = borde derecho/inferior). Si hay varios, devolvé una caja que "
+    "los encierre a todos. Si no hay ninguno, hay_logo=false y las coordenadas en 0."
+)
+
+
+def localizar_logo(datos: bytes) -> Optional[Dict]:
+    """Caja del logo del medio en milésimas ({"x0","y0","x1","y1"}) o None si no hay o no se pudo analizar."""
+    b64 = _bytes_a_jpeg_b64(datos)
+    if not b64:
+        return None
+    mensajes = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": _PROMPT_LOGO},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+        ],
+    }]
+    parsed = None
+    keys = config.gemini_keys_ordenadas()
+    if keys:
+        client = OpenAI(api_key=keys[0], base_url=config._PROVIDER_DEFAULTS["gemini"]["base_url"], timeout=25, max_retries=0)
+        for modelo in _modelos()[:2]:
+            try:
+                resp = client.chat.completions.create(
+                    model=modelo, messages=mensajes, temperature=0, max_tokens=200,
+                    response_format={"type": "json_object"},
+                )
+                p = json.loads(resp.choices[0].message.content or "{}")
+                if isinstance(p, dict) and "hay_logo" in p:
+                    parsed = p
+                    break
+            except Exception as e:
+                logger.warning("Localizar logo falló (%s): %s", modelo, str(e)[:120])
+    if parsed is None:
+        parsed = llm_respaldo.completar_json(mensajes, "hay_logo", max_tokens=200, vision=True)
+    if not parsed or not parsed.get("hay_logo"):
+        return None
+    try:
+        caja = {k: max(0, min(1000, int(parsed[k]))) for k in ("x0", "y0", "x1", "y1")}
+    except (KeyError, TypeError, ValueError):
+        return None
+    if caja["x1"] <= caja["x0"] or caja["y1"] <= caja["y0"]:
+        return None
+    return caja

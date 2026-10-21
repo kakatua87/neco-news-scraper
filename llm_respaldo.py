@@ -15,6 +15,8 @@ from typing import Dict, List, Optional
 import requests
 from openai import OpenAI
 
+import uso_ia
+
 logger = logging.getLogger("neconews.llm_respaldo")
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
@@ -22,6 +24,21 @@ GROQ_MODELO_TEXTO = os.getenv("GROQ_MODEL_TEXTO", "openai/gpt-oss-120b")
 GROQ_MODELO_VISION = os.getenv("GROQ_MODEL_VISION", "qwen/qwen3.8-27b")
 CLAUDE_MODELO = os.getenv("ANTHROPIC_VERIFICADOR_MODEL", "claude-haiku-5-5")
 PRESUPUESTO_S = 90
+
+
+def _restante_groq(cabeceras) -> dict:
+    """Lo que Groq informa en cada respuesta: solicitudes restantes del día, tokens restantes del minuto y reinicios."""
+    try:
+        return {
+            "solicitudes_dia": cabeceras.get("x-ratelimit-remaining-requests"),
+            "limite_solicitudes_dia": cabeceras.get("x-ratelimit-limit-requests"),
+            "tokens_minuto": cabeceras.get("x-ratelimit-remaining-tokens"),
+            "limite_tokens_minuto": cabeceras.get("x-ratelimit-limit-tokens"),
+            "reinicio_solicitudes": cabeceras.get("x-ratelimit-reset-requests"),
+            "reinicio_tokens": cabeceras.get("x-ratelimit-reset-tokens"),
+        }
+    except Exception:
+        return {}
 
 
 def _extraer_json(texto: str) -> Optional[Dict]:
@@ -45,16 +62,22 @@ def _con_groq(mensajes: List[Dict], clave: str, max_tokens: int, vision: bool) -
     client = OpenAI(api_key=key, base_url=GROQ_BASE_URL, timeout=40, max_retries=0)
     for _ in range(2):
         try:
-            r = client.chat.completions.create(
+            bruto = client.chat.completions.with_raw_response.create(
                 model=modelo, messages=mensajes, temperature=0, max_tokens=max_tokens,
                 response_format={"type": "json_object"},
             )
+            r = bruto.parse()
+            uso_ia.registrar("groq", key, modelo, getattr(r, "usage", None), True, 200, restante=_restante_groq(bruto.headers),
+                             proposito_default="respaldo",
+                             chars_in=sum(len(str(m.get("content", ""))) for m in mensajes),
+                             chars_out=len(r.choices[0].message.content or ""))
             parsed = _extraer_json(r.choices[0].message.content or "")
             if parsed is not None and clave in parsed:
                 logger.warning("Respaldo Groq (%s) respondió", modelo)
                 return parsed
             return None
         except Exception as e:
+            uso_ia.registrar("groq", key, modelo, ok=False, codigo=uso_ia.codigo_de_error(e), proposito_default="respaldo")
             logger.warning("Respaldo Groq falló (%s): %s", modelo, str(e)[:150])
             if "429" in str(e):
                 return None  # sin cupo: pasar a Claude
@@ -100,7 +123,9 @@ def _con_claude(mensajes: List[Dict], clave: str, max_tokens: int) -> Optional[D
                     time.sleep(3)
                     continue
                 return None
-            texto = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
+            cuerpo = r.json()
+            uso_ia.registrar("claude", key, CLAUDE_MODELO, cuerpo.get("usage"), True, 200, proposito_default="respaldo")
+            texto = "".join(b.get("text", "") for b in cuerpo.get("content", []) if b.get("type") == "text")
             parsed = _extraer_json(texto)
             if parsed is not None and clave in parsed:
                 logger.warning("Respaldo Claude (%s) respondió", CLAUDE_MODELO)
@@ -129,15 +154,22 @@ def completar_texto(mensajes: List[Dict], max_tokens: int = 3500) -> Optional[st
     if key:
         try:
             client = OpenAI(api_key=key, base_url=GROQ_BASE_URL, timeout=60, max_retries=0)
-            r = client.chat.completions.create(
+            bruto = client.chat.completions.with_raw_response.create(
                 model=GROQ_MODELO_REDACCION, messages=mensajes, temperature=0.65, max_tokens=max_tokens,
                 response_format={"type": "json_object"}, extra_body={"reasoning_effort": "low"},
             )
+            r = bruto.parse()
+            uso_ia.registrar("groq", key, GROQ_MODELO_REDACCION, getattr(r, "usage", None), True, 200,
+                             restante=_restante_groq(bruto.headers), proposito_default="redaccion",
+                             chars_in=sum(len(str(m.get("content", ""))) for m in mensajes),
+                             chars_out=len(r.choices[0].message.content or ""))
             texto = (r.choices[0].message.content or "").strip()
             if texto:
                 logger.warning("Redacción con el respaldo Groq (%s)", GROQ_MODELO_REDACCION)
                 return texto
         except Exception as e:
+            uso_ia.registrar("groq", key, GROQ_MODELO_REDACCION, ok=False, codigo=uso_ia.codigo_de_error(e),
+                             proposito_default="redaccion")
             logger.warning("Respaldo Groq de redacción falló: %s", str(e)[:200])
 
     key = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -153,7 +185,10 @@ def completar_texto(mensajes: List[Dict], max_tokens: int = 3500) -> Optional[st
                 timeout=120,
             )
             if r.status_code == 200:
-                texto = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text").strip()
+                cuerpo = r.json()
+                uso_ia.registrar("claude", key, os.getenv("ANTHROPIC_REDACCION_MODEL", "claude-sonnet-5-5"),
+                                 cuerpo.get("usage"), True, 200, proposito_default="redaccion")
+                texto = "".join(b.get("text", "") for b in cuerpo.get("content", []) if b.get("type") == "text").strip()
                 if texto:
                     logger.warning("Redacción con el respaldo Claude")
                     return texto

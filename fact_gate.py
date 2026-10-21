@@ -25,6 +25,7 @@ from openai import OpenAI
 
 import config
 import llm_respaldo
+import uso_ia
 
 logger = logging.getLogger("neconews.fact_gate")
 
@@ -204,11 +205,16 @@ def _llm_json_gemini(mensajes: List[Dict], clave: str = "ok", max_tokens: int = 
                         model=modelo, messages=mensajes, temperature=0, max_tokens=max_tokens,
                         response_format={"type": "json_object"},
                     )
+                    uso_ia.registrar("gemini", key, modelo, r.usage, True, 200, proposito_default="hechos",
+                                     chars_in=sum(len(str(m.get("content", ""))) for m in mensajes),
+                                     chars_out=len(r.choices[0].message.content or ""))
                     parsed = json.loads(r.choices[0].message.content or "{}")
                     if isinstance(parsed, dict) and clave in parsed:
                         return parsed
                     break
                 except Exception as e:
+                    uso_ia.registrar("gemini", key, modelo, ok=False, codigo=uso_ia.codigo_de_error(e),
+                                     proposito_default="hechos")
                     logger.warning("Verificador falló (%s): %s", modelo, str(e)[:150])
                     if "429" in str(e):
                         config.gemini_key_agotada(key)

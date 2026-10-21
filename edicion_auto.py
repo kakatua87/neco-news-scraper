@@ -17,6 +17,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional, Tuple
 
+import uso_ia
+
 logger = logging.getLogger("neconews.edicion")
 
 VENTANA_HORAS = 14
@@ -507,6 +509,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         # Seleccionadas a mano: se respeta el orden pedido (sin reparto por secciones).
         g = restantes[0] if en_orden else siguiente_candidata(restantes, aprobadas_por_seccion)
         restantes.remove(g)
+        uso_ia.abrir(g["grupo_id"])  # las llamadas de IA de este grupo (redacción, controles) se atribuyen a su nota
         item = {"grupo_id": g["grupo_id"], "titulo": g["notas"][0].get("titulo"), "score": g["score"],
                 "seccion": g["seccion"], "seccion_scraper": g.get("seccion_scraper"), "n_fuentes": g["n_fuentes"]}
         if dry_run:
@@ -549,6 +552,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
 
         resumen["procesadas"] += 1
         noticia_id = r["noticia_id"]
+        uso_ia.fijar_nota(noticia_id)
         # pipeline_ia pisó el cuerpo de la líder: se guarda el texto original de las fuentes para poder
         # contrastar la nota después (rutina de revisión de pendientes). Columna oculta al público.
         try:
@@ -608,6 +612,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         _log(client, modo, g, "procesada", motivo=motivo, noticia_id=noticia_id)
         resumen["items"].append({**item, "resultado": "aprobada_sombra" if aprobada and not auto else "revision",
                                  "motivo": motivo})
+    uso_ia.abrir(None)
     resumen["por_seccion"] = dict(aprobadas_por_seccion)
     resumen["fallos_por_seccion"] = dict(fallos_por_seccion)
     # Un solo push con lo publicado (también si el bucle se cortó por cuota). Si falla no afecta lo ya publicado.

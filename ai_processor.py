@@ -21,6 +21,7 @@ from openai import OpenAI, APIError, RateLimitError, APIConnectionError
 
 import config
 import fechas_check
+import uso_ia
 import redaccion_check
 
 logger = logging.getLogger("neconews.ai")
@@ -862,6 +863,10 @@ class AIProcessor:
 
                 # Log de uso
                 usage = response.usage
+                uso_ia.registrar(
+                    self.provider, getattr(self.client, "api_key", None), modelos[modelo_idx], usage, True, 200,
+                    chars_in=len(system_prompt or SYSTEM_PROMPT) + len(user_prompt), chars_out=len(text),
+                )
                 if usage:
                     logger.info(
                         "Tokens | prompt=%s | completion=%s | total=%s",
@@ -872,6 +877,8 @@ class AIProcessor:
 
             except RateLimitError as e:
                 last_err = e
+                uso_ia.registrar(self.provider, getattr(self.client, "api_key", None), modelos[modelo_idx],
+                                 ok=False, codigo=429)
                 if self._fallback_keys and self._rotar_a_siguiente_key():
                     continue  # key nueva ya cargada en self.client, reintenta sin esperar
                 delay = delays[min(attempt, len(delays) - 1)]
@@ -884,6 +891,8 @@ class AIProcessor:
 
             except APIConnectionError as e:
                 last_err = e
+                uso_ia.registrar(self.provider, getattr(self.client, "api_key", None), modelos[modelo_idx],
+                                 ok=False, codigo=None)
                 delay = delays[min(attempt, len(delays) - 1)]
                 logger.warning(
                     "Error de conexión en intento %s/%s. Esperando %ss... | error=%s",
@@ -894,6 +903,8 @@ class AIProcessor:
 
             except APIError as e:
                 last_err = e
+                uso_ia.registrar(self.provider, getattr(self.client, "api_key", None), modelos[modelo_idx],
+                                 ok=False, codigo=uso_ia.codigo_de_error(e))
                 logger.error("Error API en intento %s/%s: %s", attempt + 1, max_retries, str(e)[:300])
                 if self._fallback_keys and self._es_key_invalida(e) and self._rotar_a_siguiente_key("inválida"):
                     continue  # probó con otra key de Gemini en vez de abortar

@@ -87,9 +87,12 @@ def clasificar(items: List[Dict]) -> List[str]:
             f"{i}. {it['titulo'][:160]} (el scraper la marcó: {it.get('etiqueta') or '?'})"
             for i, it in enumerate(items)
         )
-        parsed = fact_gate._llm_json(
-            [{"role": "user", "content": f"{_PROMPT}\n\nNOTAS:\n{lista}"}], clave="clasificacion", max_tokens=4096
-        )
+        import uso_ia
+
+        with uso_ia.proposito("clasificador"):
+            parsed = fact_gate._llm_json(
+                [{"role": "user", "content": f"{_PROMPT}\n\nNOTAS:\n{lista}"}], clave="clasificacion", max_tokens=4096
+            )
         for fila in (parsed or {}).get("clasificacion", []) or []:
             try:
                 i, sec = int(fila["i"]), str(fila["seccion"]).strip()

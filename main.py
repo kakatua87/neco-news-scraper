@@ -30,6 +30,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 import uvicorn
 
 import config
+import uso_ia
 import pipeline_guard
 from ai_processor import AIProcessor
 from scraper import NewsScraper
@@ -574,6 +575,7 @@ def pipeline_ia(
 
     # Nota líder = primera de la lista
     lider = notas[0]
+    uso_ia.fijar_nota(lider.get("id"))  # el consumo de IA de este proceso se atribuye a esta nota
     titulo = lider.get("titulo", "")
     all_texts = [n["cuerpo"] for n in notas if n.get("cuerpo") and len(n["cuerpo"]) >= 60]
     fuentes = [n["fuente"] for n in notas if n.get("fuente")]

@@ -20,6 +20,7 @@ from PIL import Image
 
 import config
 import llm_respaldo
+import uso_ia
 from url_segura import url_es_publica
 
 logger = logging.getLogger("neconews.image_gate")
@@ -153,12 +154,16 @@ def diagnosticar_imagen(url: str, revision_bordes: bool = False) -> Dict:
                         model=modelo, messages=mensajes, temperature=0, max_tokens=300,
                         response_format={"type": "json_object"},
                     )
+                    uso_ia.registrar("gemini", key, modelo, resp.usage, True, 200, proposito_default="imagen",
+                                     chars_in=len(_PROMPT) + 1500, chars_out=len(resp.choices[0].message.content or ""))
                     parsed = json.loads(resp.choices[0].message.content or "{}")
                     if isinstance(parsed, dict) and "marca_agua" in parsed:
                         return {"resultado": interpretar(parsed), "error": None}
                     ultimo_error = "respuesta sin campo marca_agua"
                     break
                 except Exception as e:
+                    uso_ia.registrar("gemini", key, modelo, ok=False, codigo=uso_ia.codigo_de_error(e),
+                                     proposito_default="imagen")
                     ultimo_error = "%s: %s" % (modelo, str(e)[:200])
                     logger.warning("Visión falló (modelo=%s, intento=%s): %s", modelo, intento + 1, str(e)[:150])
                     if "429" in str(e):
@@ -241,11 +246,15 @@ def localizar_logo(datos: bytes) -> Optional[Dict]:
                     model=modelo, messages=mensajes, temperature=0, max_tokens=200,
                     response_format={"type": "json_object"},
                 )
+                uso_ia.registrar("gemini", keys[0], modelo, resp.usage, True, 200, proposito_default="recorte",
+                                 chars_in=len(_PROMPT_LOGO) + 1500, chars_out=len(resp.choices[0].message.content or ""))
                 p = json.loads(resp.choices[0].message.content or "{}")
                 if isinstance(p, dict) and "hay_logo" in p:
                     parsed = p
                     break
             except Exception as e:
+                uso_ia.registrar("gemini", keys[0], modelo, ok=False, codigo=uso_ia.codigo_de_error(e),
+                                 proposito_default="recorte")
                 logger.warning("Localizar logo falló (%s): %s", modelo, str(e)[:120])
     if parsed is None:
         parsed = llm_respaldo.completar_json(mensajes, "hay_logo", max_tokens=200, vision=True)

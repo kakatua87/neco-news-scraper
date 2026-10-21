@@ -576,6 +576,20 @@ def pipeline_ia(
     # Nota líder = primera de la lista
     lider = notas[0]
     uso_ia.fijar_nota(lider.get("id"))  # el consumo de IA de este proceso se atribuye a esta nota
+
+    # Sin sección indicada (la bandeja ya no deja elegirla): la IA la decide entre las secciones del portal,
+    # con el mismo clasificador por tema que usa la edición matutina.
+    if not seccion:
+        try:
+            import clasificador_secciones
+
+            seccion = clasificador_secciones.clasificar(
+                [{"titulo": lider.get("titulo", ""), "etiqueta": lider.get("seccion") or ""}]
+            )[0]
+            logger.info("Sección elegida por la IA: %s (grupo_id=%s)", seccion, grupo_id)
+        except Exception:
+            logger.exception("No se pudo clasificar la sección; se usa la del scraper")
+            seccion = lider.get("seccion") or "Local"
     titulo = lider.get("titulo", "")
     all_texts = [n["cuerpo"] for n in notas if n.get("cuerpo") and len(n["cuerpo"]) >= 60]
     fuentes = [n["fuente"] for n in notas if n.get("fuente")]
@@ -724,7 +738,8 @@ async def procesar_grupo(request: Request) -> Dict:
     grupo_id = body.get("grupo_id", "").strip()
     fuentes_ids: List[str] = body.get("fuentes_ids", [])
     imagen_url: Optional[str] = body.get("imagen_url")
-    seccion: str = body.get("seccion", "Local")
+    # Sin sección, pipeline_ia la decide con la IA (ya no la elige el editor en la bandeja).
+    seccion: str = (body.get("seccion") or "").strip()
     provider: Optional[str] = (body.get("provider") or "").strip() or None
 
     if not grupo_id:

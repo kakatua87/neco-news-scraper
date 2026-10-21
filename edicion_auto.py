@@ -434,10 +434,20 @@ def _preparar_manual(client, cfg: Dict, manual: Dict) -> Tuple[List[Dict], int, 
             if elegidas:
                 g["notas"] = [n for n in g["notas"] if str(n["id"]) in elegidas] or g["notas"]
             g["seccion_scraper"] = g["notas"][0].get("seccion")
-            g["seccion"] = it.get("seccion") or g["notas"][0].get("seccion") or "Local"
+            g["seccion"] = it.get("seccion") or ""
             g["n_fuentes"] = _n_fuentes(g["notas"])
             g["score"] = puntuar(g, pesos)
             grupos.append(g)
+        # La sección la decide la IA (ya no se elige a mano): una sola llamada para todo el lote.
+        sin_seccion = [g for g in grupos if not g["seccion"]]
+        if sin_seccion:
+            import clasificador_secciones
+
+            secciones = clasificador_secciones.clasificar(
+                [{"titulo": g["notas"][0].get("titulo") or "", "etiqueta": g["seccion_scraper"] or ""} for g in sin_seccion]
+            )
+            for g, sec in zip(sin_seccion, secciones):
+                g["seccion"] = sec
         return grupos, len(grupos), True
     if manual.get("solo_hoy"):
         ranking = ordenar(fusionar_duplicados(candidatos(client, desde=inicio_dia_ar_utc())), cfg)

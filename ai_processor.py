@@ -909,6 +909,17 @@ class AIProcessor:
                     continue
                 raise
 
+        # Gemini no pudo: respaldo con Groq (gratis) y después Claude, si hay clave cargada. Es el mismo
+        # prompt; solo cambia quién lo contesta. El JSON se valida igual que el de Gemini.
+        import llm_respaldo
+
+        texto = llm_respaldo.completar_texto([
+            {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ])
+        if texto:
+            return texto
+
         if last_err is not None:
             raise last_err
         raise RuntimeError("IA no generó texto tras todos los reintentos.")

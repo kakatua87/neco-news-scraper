@@ -114,3 +114,51 @@ def _con_claude(mensajes: List[Dict], clave: str, max_tokens: int) -> Optional[D
 def completar_json(mensajes: List[Dict], clave: str, max_tokens: int = 4096, vision: bool = False) -> Optional[Dict]:
     """Prueba Groq y luego Claude. Devuelve el JSON (que debe incluir `clave`) o None si ninguno respondió."""
     return _con_groq(mensajes, clave, max_tokens, vision) or _con_claude(mensajes, clave, max_tokens)
+
+
+GROQ_MODELO_REDACCION = os.getenv("GROQ_MODEL_REDACCION", "openai/gpt-oss-120b")
+
+
+def completar_texto(mensajes: List[Dict], max_tokens: int = 3500) -> Optional[str]:
+    """
+    Último recurso para la redacción cuando Gemini no responde: devuelve el texto (JSON) del primer respaldo
+    que conteste, o None. Groq (gratis, límite 8.000 tokens/min: puede rechazar pedidos largos) y después Claude.
+    Los prompts no se tocan: se manda el mismo system + user que se le mandaba a Gemini.
+    """
+    key = os.getenv("GROQ_API_KEY", "").strip()
+    if key:
+        try:
+            client = OpenAI(api_key=key, base_url=GROQ_BASE_URL, timeout=60, max_retries=0)
+            r = client.chat.completions.create(
+                model=GROQ_MODELO_REDACCION, messages=mensajes, temperature=0.65, max_tokens=max_tokens,
+                response_format={"type": "json_object"}, extra_body={"reasoning_effort": "low"},
+            )
+            texto = (r.choices[0].message.content or "").strip()
+            if texto:
+                logger.warning("Redacción con el respaldo Groq (%s)", GROQ_MODELO_REDACCION)
+                return texto
+        except Exception as e:
+            logger.warning("Respaldo Groq de redacción falló: %s", str(e)[:200])
+
+    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if key:
+        try:
+            system = "\n\n".join(m["content"] for m in mensajes if m["role"] == "system" and isinstance(m["content"], str))
+            msgs = [{"role": m["role"], "content": _a_bloques_claude(m["content"])} for m in mensajes if m["role"] != "system"]
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json={"model": os.getenv("ANTHROPIC_REDACCION_MODEL", "claude-sonnet-5-5"), "max_tokens": 8192,
+                      "temperature": 0.65, "system": system, "messages": msgs},
+                timeout=120,
+            )
+            if r.status_code == 200:
+                texto = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text").strip()
+                if texto:
+                    logger.warning("Redacción con el respaldo Claude")
+                    return texto
+            else:
+                logger.warning("Respaldo Claude de redacción falló: %s %s", r.status_code, r.text[:150])
+        except Exception as e:
+            logger.warning("Respaldo Claude de redacción falló: %s", str(e)[:200])
+    return None

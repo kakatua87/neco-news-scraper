@@ -428,7 +428,11 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
     publicadas_ids: List[str] = []
     errores_cuota = 0
     inicio = time.monotonic()
-    while restantes and resumen["aprobadas"] < objetivo and resumen["procesadas"] < objetivo * 2:
+    # Los errores de la IA (503, timeouts de Gemini) no consumen el tope de notas procesadas: se acotan aparte.
+    # Hoy (21/10) tres errores se llevaron 3 de las 8 plazas y la edición cerró con 3 de 4 publicadas.
+    while (restantes and resumen["aprobadas"] < objetivo
+           and resumen["procesadas"] - resumen["errores"] < objetivo * 2
+           and resumen["errores"] < 6):
         if time.monotonic() - inicio > MAX_MINUTOS_EDICION * 60:
             logger.warning("Edición cortada por tiempo (%s min)", MAX_MINUTOS_EDICION)
             resumen["cortada_por_tiempo"] = True

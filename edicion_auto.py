@@ -83,17 +83,30 @@ def fusionar_duplicados(cands: List[Dict]) -> List[Dict]:
     return resultado
 
 
-def candidatos(client, horas: int = VENTANA_HORAS) -> List[Dict]:
-    """Agrupa notas raw recientes por grupo_id."""
-    desde = (datetime.now(timezone.utc) - timedelta(hours=horas)).isoformat()
-    resp = (
+def inicio_dia_ar_utc() -> datetime:
+    """Inicio del día argentino de hoy, en UTC."""
+    ahora_ar = datetime.now(timezone.utc) - timedelta(hours=3)
+    return ahora_ar.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=3)
+
+
+def candidatos(client, horas: int = VENTANA_HORAS, desde: Optional[datetime] = None,
+               grupo_ids: Optional[List[str]] = None) -> List[Dict]:
+    """
+    Agrupa notas raw por grupo_id. Por defecto las de las últimas `horas`; con `desde` las creadas desde
+    esa fecha (p. ej. hoy); con `grupo_ids` solo esos grupos, sin importar la antigüedad.
+    """
+    consulta = (
         client.client.table("noticias")
         .select("id, grupo_id, titulo, fuente, seccion, imagen_url, created_at")
         .eq("estado", "raw")
         .not_.is_("grupo_id", "null")
-        .gte("created_at", desde)
-        .execute()
     )
+    if grupo_ids:
+        consulta = consulta.in_("grupo_id", list(grupo_ids))
+    else:
+        limite = desde or (datetime.now(timezone.utc) - timedelta(hours=horas))
+        consulta = consulta.gte("created_at", limite.isoformat())
+    resp = consulta.execute()
     grupos: Dict[str, List[Dict]] = defaultdict(list)
     for fila in resp.data or []:
         grupos[fila["grupo_id"]].append(fila)
@@ -361,7 +374,8 @@ def ya_corrio_hoy(client) -> bool:
     inicio_utc = ahora_ar.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=3)
     resp = (
         client.client.table("edicion_log").select("id", count="exact")
-        .in_("resultado", ["procesada", "publicada"]).gte("ejecutado_at", inicio_utc.isoformat())
+        .in_("resultado", ["procesada", "publicada"]).neq("modo", "manual")
+        .gte("ejecutado_at", inicio_utc.isoformat())
         .limit(1).execute()
     )
     return (resp.count or 0) > 0
@@ -373,7 +387,7 @@ def publicadas_hoy(client) -> int:
     inicio_utc = ahora_ar.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=3)
     resp = (
         client.client.table("edicion_log").select("id", count="exact")
-        .eq("resultado", "publicada").gte("ejecutado_at", inicio_utc.isoformat()).execute()
+        .eq("resultado", "publicada").neq("modo", "manual").gte("ejecutado_at", inicio_utc.isoformat()).execute()
     )
     return resp.count or 0
 
@@ -395,7 +409,44 @@ def _log(client, modo: str, g: Dict, resultado: str, motivo: str = "", noticia_i
         logger.exception("No se pudo escribir edicion_log")
 
 
-def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = False) -> Dict:
+TOPE_MANUAL_DEFAULT = 4
+
+
+def _preparar_manual(client, cfg: Dict, manual: Dict) -> Tuple[List[Dict], int, bool]:
+    """
+    Candidatas de una corrida manual (botón de la Bandeja). Devuelve (grupos, objetivo, en_orden).
+    - Con `items` ([{grupo_id, fuentes_ids?, seccion?}]) se procesan esos grupos, en ese orden, con la sección y las
+      fuentes que eligió el editor; no se aplican el reparto por secciones ni los filtros de archivo/excluidas.
+    - Con `solo_hoy` se rankea y reparte como la edición matutina, pero solo con las notas de hoy (día argentino).
+    """
+    pesos = {**PESOS_DEFAULT, **(cfg.get("edicion_pesos") or {})}
+    items = [i for i in (manual.get("items") or []) if i.get("grupo_id")]
+    if items:
+        por_grupo = {g["grupo_id"]: g for g in candidatos(client, grupo_ids=[i["grupo_id"] for i in items])}
+        grupos: List[Dict] = []
+        for it in items:
+            g = por_grupo.get(it["grupo_id"])
+            if not g:
+                continue
+            elegidas = {str(x) for x in (it.get("fuentes_ids") or [])}
+            if elegidas:
+                g["notas"] = [n for n in g["notas"] if str(n["id"]) in elegidas] or g["notas"]
+            g["seccion_scraper"] = g["notas"][0].get("seccion")
+            g["seccion"] = it.get("seccion") or g["notas"][0].get("seccion") or "Local"
+            g["n_fuentes"] = _n_fuentes(g["notas"])
+            g["score"] = puntuar(g, pesos)
+            grupos.append(g)
+        return grupos, len(grupos), True
+    if manual.get("solo_hoy"):
+        ranking = ordenar(fusionar_duplicados(candidatos(client, desde=inicio_dia_ar_utc())), cfg)
+        grupos = clasificar_pool(ranking[:MAX_A_CLASIFICAR], cfg)
+        tope = int(manual.get("tope") or TOPE_MANUAL_DEFAULT)
+        return grupos, max(1, min(tope, 20)), False
+    return [], 0, False
+
+
+def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = False,
+                     manual: Optional[Dict] = None) -> Dict:
     """
     `procesar` es `pipeline_ia` (inyectado para evitar import circular).
     dry_run=True solo rankea, clasifica y loguea el reparto previsto, sin redactar con la IA.
@@ -406,19 +457,30 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
     El orden lo decide `siguiente_candidata`, para repartir entre secciones.
     """
     cfg = client.get_scraper_config() or {}
-    if not cfg.get("edicion_auto_activa") and not dry_run:
-        return {"ok": True, "omitida": "edicion_auto_activa=false"}
+    en_orden = False
+    if manual is not None:
+        # Corrida manual (botón de la Bandeja): el click es la autorización, así que publica lo aprobado sin
+        # depender de las banderas de la edición matutina y sin descontar su cupo diario.
+        auto, modo = True, "manual"
+        restantes, objetivo, en_orden = _preparar_manual(client, cfg, manual)
+        if not restantes:
+            return {"ok": True, "omitida": "no hay grupos para procesar", "modo": modo, "objetivo": 0,
+                    "candidatas": 0, "procesadas": 0, "aprobadas": 0, "publicadas": 0, "para_revision": 0,
+                    "errores": 0, "por_seccion": {}, "items": []}
+    else:
+        if not cfg.get("edicion_auto_activa") and not dry_run:
+            return {"ok": True, "omitida": "edicion_auto_activa=false"}
 
-    auto = bool(cfg.get("edicion_auto_publicar")) and not dry_run
-    modo = "auto" if auto else "sombra"
-    objetivo = int(cfg.get("edicion_max") or 8)
-    if auto:
-        objetivo -= publicadas_hoy(client)
-        if objetivo <= 0:
-            return {"ok": True, "omitida": "ya se publicó el cupo diario"}
+        auto = bool(cfg.get("edicion_auto_publicar")) and not dry_run
+        modo = "auto" if auto else "sombra"
+        objetivo = int(cfg.get("edicion_max") or 8)
+        if auto:
+            objetivo -= publicadas_hoy(client)
+            if objetivo <= 0:
+                return {"ok": True, "omitida": "ya se publicó el cupo diario"}
 
-    ranking = ordenar(fusionar_duplicados(candidatos(client)), cfg)
-    restantes = clasificar_pool(ranking[:MAX_A_CLASIFICAR], cfg)
+        ranking = ordenar(fusionar_duplicados(candidatos(client)), cfg)
+        restantes = clasificar_pool(ranking[:MAX_A_CLASIFICAR], cfg)
     resumen = {"ok": True, "modo": modo, "objetivo": objetivo, "candidatas": len(restantes),
                "procesadas": 0, "aprobadas": 0, "publicadas": 0, "para_revision": 0, "errores": 0,
                "por_seccion": {}, "items": []}
@@ -427,6 +489,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
     fallos_por_seccion: Dict[str, int] = defaultdict(int)
     publicadas_ids: List[str] = []
     errores_cuota = 0
+    etiqueta_pub = "publicada por boton (Bandeja)" if manual is not None else "publicada automaticamente"
     inicio = time.monotonic()
     # Los errores de la IA (503, timeouts de Gemini) no consumen el tope de notas procesadas: se acotan aparte.
     # Hoy (21/10) tres errores se llevaron 3 de las 8 plazas y la edición cerró con 3 de 4 publicadas.
@@ -437,10 +500,12 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
             logger.warning("Edición cortada por tiempo (%s min)", MAX_MINUTOS_EDICION)
             resumen["cortada_por_tiempo"] = True
             break
-        restantes = [g for g in restantes if fallos_por_seccion[g["seccion"]] < MAX_FALLOS_POR_SECCION]
+        if not en_orden:
+            restantes = [g for g in restantes if fallos_por_seccion[g["seccion"]] < MAX_FALLOS_POR_SECCION]
         if not restantes:
             break
-        g = siguiente_candidata(restantes, aprobadas_por_seccion)
+        # Seleccionadas a mano: se respeta el orden pedido (sin reparto por secciones).
+        g = restantes[0] if en_orden else siguiente_candidata(restantes, aprobadas_por_seccion)
         restantes.remove(g)
         item = {"grupo_id": g["grupo_id"], "titulo": g["notas"][0].get("titulo"), "score": g["score"],
                 "seccion": g["seccion"], "seccion_scraper": g.get("seccion_scraper"), "n_fuentes": g["n_fuentes"]}
@@ -521,7 +586,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
                     resumen["aprobadas"] += 1
                     aprobadas_por_seccion[g["seccion"]] += 1
                     client.client.table("noticias").update(
-                        {"score": g["score"], "auto_motivo": f"publicada automaticamente | {motivo}"[:500]}
+                        {"score": g["score"], "auto_motivo": f"{etiqueta_pub} | {motivo}"[:500]}
                     ).eq("id", noticia_id).execute()
                     _log(client, modo, g, "publicada", motivo=motivo, noticia_id=noticia_id)
                     resumen["items"].append({**item, "resultado": "publicada"})

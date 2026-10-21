@@ -20,6 +20,7 @@ import sys
 import time
 import uuid
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import requests
@@ -799,6 +800,68 @@ def edicion_matutina(dry_run: bool = False, solo_si_no_corrio: bool = False) -> 
 
     threading.Thread(target=_correr, name="edicion-matutina", daemon=True).start()
     return {"ok": True, "iniciada": True}
+
+
+_ULTIMA_MANUAL: Dict = {}
+
+
+@app.post("/edicion-manual", dependencies=[Depends(require_internal_secret)])
+def edicion_manual(body: Dict) -> Dict:
+    """
+    Botón "Publicar con IA" de la Bandeja. Body: {items?: [{grupo_id, fuentes_ids?, seccion?}], solo_hoy?: bool,
+    tope?: int}. Con `items` procesa esos grupos; con `solo_hoy` los de hoy (día argentino) hasta `tope`.
+    Publica lo que pasa los controles, sin descontar el cupo de la edición matutina. Corre en segundo plano y
+    comparte el lock con la edición de las 06:00. El resultado se consulta en GET /edicion-estado.
+    """
+    import edicion_auto
+
+    items = body.get("items") or []
+    solo_hoy = bool(body.get("solo_hoy"))
+    if not items and not solo_hoy:
+        return {"ok": False, "error": "indicá grupos (items) o solo_hoy"}
+    if len(items) > 30:
+        return {"ok": False, "error": "demasiados grupos seleccionados (máximo 30)"}
+    manual = {"items": items, "solo_hoy": solo_hoy, "tope": body.get("tope")}
+
+    if not _EDICION_LOCK.acquire(blocking=False):
+        return {"ok": False, "error": "ya hay una edición en curso"}
+
+    terminada = _threading.Event()
+    _ULTIMA_MANUAL.clear()
+    _ULTIMA_MANUAL["inicio"] = datetime.now(timezone.utc).isoformat()
+
+    def _mantener_despierto() -> None:
+        url = (os.getenv("RENDER_EXTERNAL_URL") or config.SCRAPER_URL or "").rstrip("/")
+        if not url.startswith("http") or "localhost" in url:
+            return
+        while not terminada.wait(240):
+            try:
+                requests.get(f"{url}/health", timeout=20)
+            except Exception:
+                logger.warning("Autoping a %s/health falló", url)
+
+    def _correr() -> None:
+        try:
+            resumen = edicion_auto.ejecutar_edicion(SupabaseNewsClient(), pipeline_ia, manual=manual)
+            logger.info("Edición manual finalizada: %s", {k: v for k, v in resumen.items() if k != "items"})
+            _ULTIMA_MANUAL["resumen"] = resumen
+        except Exception as e:
+            logger.exception("Error en la edición manual")
+            _ULTIMA_MANUAL["resumen"] = {"ok": False, "error": str(e)[:200]}
+        finally:
+            _ULTIMA_MANUAL["fin"] = datetime.now(timezone.utc).isoformat()
+            terminada.set()
+            _EDICION_LOCK.release()
+
+    _threading.Thread(target=_mantener_despierto, name="edicion-manual-autoping", daemon=True).start()
+    _threading.Thread(target=_correr, name="edicion-manual", daemon=True).start()
+    return {"ok": True, "iniciada": True}
+
+
+@app.get("/edicion-estado", dependencies=[Depends(require_internal_secret)])
+def edicion_estado() -> Dict:
+    """Si hay una edición (matutina o manual) en curso y el resumen de la última corrida manual."""
+    return {"ok": True, "en_curso": _EDICION_LOCK.locked(), "ultima_manual": dict(_ULTIMA_MANUAL) or None}
 
 
 @app.post("/probar-portal", dependencies=[Depends(require_internal_secret)])

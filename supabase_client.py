@@ -11,6 +11,7 @@ from typing import Dict, List, Set
 from supabase import Client, create_client
 
 import config
+from clasificador_secciones import normalizar_seccion
 
 logger = logging.getLogger("neconews.supabase")
 
@@ -124,6 +125,7 @@ class SupabaseNewsClient:
 
     def update_seccion(self, noticia_id: str, nueva_seccion: str) -> None:
         """Actualiza la sección de una noticia desde Telegram."""
+        nueva_seccion = normalizar_seccion(nueva_seccion, "Sociedad")
         self.client.table("noticias").update({"seccion": nueva_seccion}).eq("id", noticia_id).execute()
         logger.info("Sección actualizada: id=%s → %s", noticia_id, nueva_seccion)
 
@@ -271,7 +273,11 @@ class SupabaseNewsClient:
                 "twitter_text": datos_ia.get("twitter_text", ""),
                 "guion_video": datos_ia.get("guion_video", ""),
                 "slug": datos_ia.get("slug", "").strip(),
-                "seccion": datos_ia.get("seccion") or datos_ia.get("seccion_sugerida") or seccion_fallback,
+                # Siempre una sección oficial del portal: lo que la IA invente se lleva a su equivalente.
+                "seccion": normalizar_seccion(
+                    datos_ia.get("seccion") or datos_ia.get("seccion_sugerida") or seccion_fallback,
+                    normalizar_seccion(seccion_fallback),
+                ),
                 "estado": "pendiente",
             }
             if datos_ia.get("fuente"):

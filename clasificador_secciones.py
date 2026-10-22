@@ -14,43 +14,80 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("neconews.clasificador")
 
-SECCIONES_VALIDAS = (
-    "Política", "Economía", "Policiales", "Local", "Deportes",
-    "Sociedad", "Salud", "Cultura", "Tecnología", "Educación",
+# Secciones oficiales del portal (el menú del sitio): copia de SECCIONES_MENU en neco-news/src/lib/secciones.ts.
+# Hay que mantenerlas iguales: la IA nunca puede publicar en una sección que el portal no tiene ni crear una nueva.
+SECCIONES_PORTAL = (
+    "Local", "Policiales", "Política", "Deportes", "Zona", "Sociedad", "Opinión", "Cultura", "Tendencias",
 )
+# Secciones de servicio que carga el sistema aparte (no las elige la IA).
+SECCIONES_SERVICIO = ("Obituarios", "Farmacias")
+# Las que la IA puede elegir al clasificar por tema (Opinión es de autor: solo se carga a mano).
+SECCIONES_VALIDAS = tuple(s for s in SECCIONES_PORTAL if s != "Opinión")
+
+# Nombres anteriores o variantes que se llevan a una sección oficial.
+_EQUIVALENCIAS = {
+    "economía": "Política", "economia": "Política", "politica": "Política",
+    "policial": "Policiales", "policiales y justicia": "Policiales",
+    "deporte": "Deportes",
+    "salud": "Sociedad", "educación": "Sociedad", "educacion": "Sociedad",
+    "tecnología": "Tendencias", "tecnologia": "Tendencias", "tendencia": "Tendencias",
+    "general": "Sociedad", "nacional": "Sociedad", "internacional": "Sociedad", "país": "Sociedad", "pais": "Sociedad",
+    "clima": "Local", "región": "Zona", "region": "Zona", "regional": "Zona",
+    "opinion": "Opinión",
+}
+
+
+def normalizar_seccion(valor: Optional[str], respaldo: str = "Sociedad") -> str:
+    """
+    Devuelve siempre una sección oficial del portal (o de servicio). Lo que no existe se lleva a su equivalente
+    ("Economía" → "Política", "Salud" → "Sociedad"...) y, si no hay ninguna, a `respaldo`: nunca se crea una sección nueva.
+    """
+    v = (valor or "").strip()
+    if not v:
+        return respaldo if respaldo in SECCIONES_PORTAL else "Sociedad"
+    oficiales = {s.lower(): s for s in SECCIONES_PORTAL + SECCIONES_SERVICIO}
+    if v.lower() in oficiales:
+        return oficiales[v.lower()]
+    equivalente = _EQUIVALENCIAS.get(v.lower())
+    if equivalente:
+        return equivalente
+    logger.warning("Sección '%s' no existe en el portal: se usa '%s'", v, respaldo)
+    return respaldo if respaldo in SECCIONES_PORTAL else "Sociedad"
 
 _PROMPT = (
     "Sos el editor de un diario de Necochea. Clasificá cada nota en UNA sección.\n"
-    "Secciones: " + ", ".join(SECCIONES_VALIDAS) + ".\n"
+    "Secciones: " + ", ".join(SECCIONES_VALIDAS) + " (no existe ninguna otra).\n"
     "Orden de decisión:\n"
     "1. Policiales: delitos, accidentes, causas judiciales, rescates, operativos (sea local o no).\n"
     "2. Deportes: cualquier hecho deportivo (sea local o no).\n"
-    "3. Local: todo hecho que ocurre en Necochea, Quequén o la región, o que los afecta de forma "
-    "concreta (gobierno municipal, puerto, servicios, eventos, aniversarios, clima local, vecinos, "
-    "comercio local, cultura y educación locales), aunque tenga un tema de otra sección.\n"
-    "4. Si NO es local: Política (gobierno, elecciones, legislación), Economía (precios, empleo, "
-    "finanzas, tarifas), Educación, Salud, Cultura, Tecnología según el tema principal.\n"
-    "5. Sociedad: lo nacional o general que no entra claramente en las anteriores.\n"
+    "3. Local: todo hecho que ocurre en Necochea o Quequén, o que los afecta de forma concreta (gobierno "
+    "municipal, puerto, servicios, eventos, aniversarios, clima local, vecinos, comercio local, cultura y "
+    "educación locales), aunque tenga un tema de otra sección.\n"
+    "4. Zona: hechos que ocurren en el resto del partido de Necochea (Juan N. Fernández, Claraz, Energía, "
+    "Ramón Santos, Nicanor Olivera/La Dulce, Costa Bonita) o en localidades vecinas: Lobería, San Cayetano, "
+    "Tres Arroyos, Balcarce, Mar del Plata y la región. Si el hecho es de Necochea/Quequén va a Local, no a Zona.\n"
+    "5. Si NO es local ni de la zona: Política (gobierno, elecciones, legislación y también economía: precios, "
+    "empleo, finanzas, tarifas) o Cultura según el tema principal.\n"
+    "6. Tendencias: temas virales, redes sociales, tecnología, ciencia, estilo de vida, consumo, curiosidades.\n"
+    "7. Sociedad: lo nacional o general (incluye salud y educación) que no entra claramente en las anteriores.\n"
     "Respondé SOLO JSON: {\"ok\": true, \"clasificacion\": [{\"i\": 0, \"seccion\": \"Local\"}, ...]} "
     "con una entrada por cada nota, usando exactamente los nombres de sección de la lista."
 )
 
 # Orden importa: las dos primeras (Policiales, Deportes) mandan sobre "Local" en el fallback.
 _PALABRAS = (
-    ("Policiales", r"polic|detenid|arrest|robo|robaron|choc|herid|accidente|homicid|asesin|secuestr|"
+    ("Policiales", r"polic|detenid|arrest|robo|robaron|choc|choq|herid|accidente|homicid|asesin|secuestr|"
                    r"incendi|balacera|vuelc|despist|prefectura|fiscal|condena|estafa|narco|droga|apresad|"
                    r"rescat|operativo|atrapad"),
     ("Deportes", r"fútbol|futbol|liga |gol |goles|torneo|campeonat|partido|boxeo|básquet|basquet|tenis|golf|"
                  r"selecci[oó]n|mundial|atleta|piloto|rally|clásico|clasico|cinturon"),
-    ("Educación", r"escuela|docente|universit|unicen|clases|alumnos|estudiantes|paro docente"),
     ("Política", r"diputad|senad|gobierno|intendente|concejo|concejal|elecciones|milei|kicillof|dnu|"
-                 r"congreso|ministr|presidente|peronismo|oposici"),
-    ("Economía", r"dólar|dolar|inflaci|riesgo país|riesgo pais|salario|tarifa|empleo|banco|inversi|"
-                 r"econom|precios|vtv"),
-    ("Salud", r"hospital|salud|vacun|médic|medic|sanatorio|dengue|mamograf|cáncer|cancer"),
+                 r"congreso|ministr|presidente|peronismo|oposici|dólar|dolar|inflaci|riesgo país|riesgo pais|"
+                 r"salario|tarifa|empleo|banco|inversi|econom|precios|vtv"),
     ("Cultura", r"festival|música|musica|banda|concierto|teatro|libro|muestra|cine|artista|homenaje|"
                 r"tributo|martín fierro|martin fierro|show"),
-    ("Tecnología", r"tecnolog|inteligencia artificial|celular|aplicaci"),
+    ("Tendencias", r"tecnolog|inteligencia artificial|celular|aplicaci|viral|tiktok|instagram|redes sociales|"
+                   r"influencer|moda|gastronom"),
 )
 
 
@@ -64,12 +101,15 @@ def por_palabras(titulo: str, etiqueta_scraper: str = "") -> str:
     for seccion, patron in _PALABRAS[:2]:  # Policiales, Deportes
         if re.search(patron, t):
             return seccion
-    if re.search(r"necochea|quequ[eé]n|costa atl|lober[ií]a|san cayetano", t):
+    if re.search(r"necochea|quequ[eé]n", t):
         return "Local"
+    if re.search(r"lober[ií]a|san cayetano|tres arroyos|balcarce|mar del plata|energ[ií]a|claraz|"
+                 r"juan n\. fern|ramón santos|ramon santos|la dulce|nicanor olivera|costa bonita", t):
+        return "Zona"
     for seccion, patron in _PALABRAS[2:]:
         if re.search(patron, t):
             return seccion
-    return etiqueta_scraper if etiqueta_scraper in SECCIONES_VALIDAS else "Sociedad"
+    return normalizar_seccion(etiqueta_scraper)
 
 
 def clasificar(items: List[Dict]) -> List[str]:

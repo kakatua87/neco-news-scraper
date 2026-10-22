@@ -411,6 +411,45 @@ def _log(client, modo: str, g: Dict, resultado: str, motivo: str = "", noticia_i
         logger.exception("No se pudo escribir edicion_log")
 
 
+def notificar_admin(client, tipo: str, titulo: str, detalle: Optional[Dict] = None) -> None:
+    """Deja un aviso en la campana del admin (tabla `admin_notificaciones`). Nunca rompe la edición."""
+    try:
+        client.client.table("admin_notificaciones").insert(
+            {"tipo": tipo, "titulo": titulo[:200], "detalle": detalle}
+        ).execute()
+    except Exception:
+        logger.exception("No se pudo guardar el aviso para el admin")
+
+
+def notificar_edicion(client, modo: str, resumen: Dict) -> None:
+    """Aviso de que terminó de procesar y publicar con IA: la matutina, la manual (botón) o la de prueba."""
+    nombre = {"manual": "Edición manual", "auto": "Edición matutina", "sombra": "Edición de prueba"}.get(modo, "Edición")
+    pub = int(resumen.get("publicadas") or 0)
+    rev = int(resumen.get("para_revision") or 0)
+    err = int(resumen.get("errores") or 0)
+    partes = [f"{pub} publicada{'s' if pub != 1 else ''}", f"{rev} a Pendientes"]
+    if err:
+        partes.append(f"{err} con error de la IA")
+    if resumen.get("cortada_por_tiempo"):
+        partes.append("cortada por tiempo")
+    if resumen.get("cortada_por_cuota"):
+        partes.append("cortada: sin cuota de IA")
+    items = [
+        {"titulo": (i.get("titulo") or "")[:120], "seccion": i.get("seccion"), "resultado": i.get("resultado"),
+         "motivo": (i.get("motivo") or "")[:160]}
+        for i in (resumen.get("items") or [])
+    ]
+    detalle = {
+        "modo": modo, "objetivo": resumen.get("objetivo"), "procesadas": resumen.get("procesadas"),
+        "publicadas": pub, "para_revision": rev, "errores": err,
+        "cortada_por_tiempo": bool(resumen.get("cortada_por_tiempo")),
+        "cortada_por_cuota": bool(resumen.get("cortada_por_cuota")),
+        "por_seccion": resumen.get("por_seccion") or {}, "items": items,
+    }
+    notificar_admin(client, "edicion" if err == 0 and not resumen.get("cortada_por_cuota") else "edicion_aviso",
+                    f"{nombre} terminada: {', '.join(partes)}", detalle)
+
+
 TOPE_MANUAL_DEFAULT = 4
 
 
@@ -634,4 +673,6 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         resumen["push_resumen"] = "ok" if ok_push else f"error: {detalle_push}"
         if not ok_push:
             logger.warning("Push resumen no enviado: %s", detalle_push)
+    if not dry_run:
+        notificar_edicion(client, modo, resumen)
     return resumen

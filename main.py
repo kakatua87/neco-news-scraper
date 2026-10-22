@@ -807,8 +807,13 @@ def edicion_matutina(dry_run: bool = False, solo_si_no_corrio: bool = False) -> 
         try:
             resumen = edicion_auto.ejecutar_edicion(SupabaseNewsClient(), pipeline_ia)
             logger.info("Edición matutina finalizada: %s", {k: v for k, v in resumen.items() if k != "items"})
-        except Exception:
+        except Exception as e:
             logger.exception("Error en la edición matutina")
+            try:
+                edicion_auto.notificar_admin(SupabaseNewsClient(), "error", "La edición matutina falló",
+                                             {"error": str(e)[:300]})
+            except Exception:
+                pass
         finally:
             terminada.set()
             _EDICION_LOCK.release()
@@ -865,6 +870,11 @@ def edicion_manual(body: Dict) -> Dict:
         except Exception as e:
             logger.exception("Error en la edición manual")
             _ULTIMA_MANUAL["resumen"] = {"ok": False, "error": str(e)[:200]}
+            try:
+                edicion_auto.notificar_admin(SupabaseNewsClient(), "error", "La edición manual falló",
+                                             {"error": str(e)[:300]})
+            except Exception:
+                pass
         finally:
             _ULTIMA_MANUAL["fin"] = datetime.now(timezone.utc).isoformat()
             terminada.set()

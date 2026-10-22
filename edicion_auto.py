@@ -411,6 +411,47 @@ def _log(client, modo: str, g: Dict, resultado: str, motivo: str = "", noticia_i
         logger.exception("No se pudo escribir edicion_log")
 
 
+CARRUSEL_POR_LOTE = 3
+
+
+def elegir_para_carrusel(candidatas: List[Dict], cantidad: int = CARRUSEL_POR_LOTE) -> List[str]:
+    """
+    Las `cantidad` notas más relevantes de un lote: mayor score primero, con foto, y de secciones distintas mientras
+    se pueda (una segunda nota de la misma sección solo si no alcanzan secciones para completar). Cada candidata es
+    {"id", "score", "seccion", "imagen_url"}. Sin foto el carrusel muestra una imagen genérica, así que van últimas.
+    """
+    orden = sorted(candidatas, key=lambda c: (bool(c.get("imagen_url")), c.get("score") or 0), reverse=True)
+    elegidas: List[Dict] = []
+    for c in orden:
+        if len(elegidas) < cantidad and c["seccion"] not in {e["seccion"] for e in elegidas}:
+            elegidas.append(c)
+    for c in orden:
+        if len(elegidas) < cantidad and c not in elegidas:
+            elegidas.append(c)
+    return [c["id"] for c in elegidas]
+
+
+def sumar_al_carrusel(client, publicadas: Dict[str, Dict]) -> List[str]:
+    """
+    De un lote de notas publicadas, suma al carrusel de la portada las 3 más relevantes (se acumulan con las de los
+    lotes anteriores del día; la función SQL `agregar_a_carrusel` se encarga del orden y del tope). Devuelve los ids.
+    """
+    if not publicadas:
+        return []
+    filas = (
+        client.client.table("noticias").select("id, imagen_url, estado").in_("id", list(publicadas)).execute().data or []
+    )
+    candidatas = [
+        {"id": f["id"], "imagen_url": f.get("imagen_url"), **publicadas[f["id"]]}
+        for f in filas if f.get("estado") == "publicada" and f["id"] in publicadas
+    ]
+    ids = elegir_para_carrusel(candidatas)
+    if ids:
+        client.client.rpc("agregar_a_carrusel", {"ids": ids}).execute()
+        logger.info("Carrusel de portada: se sumaron %s nota(s) del lote", len(ids))
+    return ids
+
+
 def notificar_admin(client, tipo: str, titulo: str, detalle: Optional[Dict] = None) -> None:
     """Deja un aviso en la campana del admin (tabla `admin_notificaciones`). Nunca rompe la edición."""
     try:
@@ -539,6 +580,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
     aprobadas_por_seccion: Dict[str, int] = defaultdict(int)
     fallos_por_seccion: Dict[str, int] = defaultdict(int)
     publicadas_ids: List[str] = []
+    publicadas_info: Dict[str, Dict] = {}  # id de la nota → score y sección, para elegir las del carrusel
     errores_cuota = 0
     etiqueta_pub = "publicada por boton (Bandeja)" if manual is not None else "publicada automaticamente"
     inicio = time.monotonic()
@@ -635,6 +677,7 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
                 ok_pub, detalle = publicar_en_portal(noticia_id)
                 if ok_pub:
                     publicadas_ids.append(noticia_id)
+                    publicadas_info[noticia_id] = {"score": g["score"], "seccion": g["seccion"]}
                     resumen["publicadas"] += 1
                     resumen["aprobadas"] += 1
                     aprobadas_por_seccion[g["seccion"]] += 1
@@ -673,6 +716,11 @@ def ejecutar_edicion(client, procesar: Callable[..., Dict], dry_run: bool = Fals
         resumen["push_resumen"] = "ok" if ok_push else f"error: {detalle_push}"
         if not ok_push:
             logger.warning("Push resumen no enviado: %s", detalle_push)
+    if publicadas_ids and not dry_run:
+        try:
+            resumen["carrusel"] = sumar_al_carrusel(client, publicadas_info)
+        except Exception:
+            logger.exception("No se pudo sumar el lote al carrusel de la portada")
     if not dry_run:
         notificar_edicion(client, modo, resumen)
     return resumen

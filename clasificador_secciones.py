@@ -17,7 +17,7 @@ logger = logging.getLogger("neconews.clasificador")
 # Secciones oficiales del portal (el menú del sitio): copia de SECCIONES_MENU en neco-news/src/lib/secciones.ts.
 # Hay que mantenerlas iguales: la IA nunca puede publicar en una sección que el portal no tiene ni crear una nueva.
 SECCIONES_PORTAL = (
-    "Local", "Policiales", "Política", "Deportes", "Zona", "Sociedad", "Opinión", "Cultura", "Tendencias",
+    "Local", "Policiales", "Política", "Economía", "Deportes", "Zona", "Sociedad", "Opinión", "Cultura", "Tendencias",
 )
 # Secciones de servicio que carga el sistema aparte (no las elige la IA).
 SECCIONES_SERVICIO = ("Obituarios", "Farmacias")
@@ -26,7 +26,7 @@ SECCIONES_VALIDAS = tuple(s for s in SECCIONES_PORTAL if s != "Opinión")
 
 # Nombres anteriores o variantes que se llevan a una sección oficial.
 _EQUIVALENCIAS = {
-    "economía": "Política", "economia": "Política", "politica": "Política",
+    "economia": "Economía", "finanzas": "Economía", "negocios": "Economía", "politica": "Política",
     "policial": "Policiales", "policiales y justicia": "Policiales",
     "deporte": "Deportes",
     "salud": "Sociedad", "educación": "Sociedad", "educacion": "Sociedad",
@@ -40,7 +40,7 @@ _EQUIVALENCIAS = {
 def normalizar_seccion(valor: Optional[str], respaldo: str = "Sociedad") -> str:
     """
     Devuelve siempre una sección oficial del portal (o de servicio). Lo que no existe se lleva a su equivalente
-    ("Economía" → "Política", "Salud" → "Sociedad"...) y, si no hay ninguna, a `respaldo`: nunca se crea una sección nueva.
+    ("Salud" → "Sociedad", "Tecnología" → "Tendencias"...) y, si no hay ninguna, a `respaldo`: nunca se crea una sección nueva.
     """
     v = (valor or "").strip()
     if not v:
@@ -66,8 +66,9 @@ _PROMPT = (
     "4. Zona: hechos que ocurren en el resto del partido de Necochea (Juan N. Fernández, Claraz, Energía, "
     "Ramón Santos, Nicanor Olivera/La Dulce, Costa Bonita) o en localidades vecinas: Lobería, San Cayetano, "
     "Tres Arroyos, Balcarce, Mar del Plata y la región. Si el hecho es de Necochea/Quequén va a Local, no a Zona.\n"
-    "5. Si NO es local ni de la zona: Política (gobierno, elecciones, legislación y también economía: precios, "
-    "empleo, finanzas, tarifas) o Cultura según el tema principal.\n"
+    "5. Si NO es de Necochea/Quequén ni de la zona: Economía (dólar, inflación, precios, tarifas, salarios, "
+    "empleo, impuestos, inversiones, empresas, comercio, agro, finanzas), Política (gobierno, elecciones, "
+    "legislación, gestión pública) o Cultura según el tema principal.\n"
     "6. Tendencias: temas virales, redes sociales, tecnología, ciencia, estilo de vida, consumo, curiosidades.\n"
     "7. Sociedad: lo nacional o general (incluye salud y educación) que no entra claramente en las anteriores.\n"
     "Respondé SOLO JSON: {\"ok\": true, \"clasificacion\": [{\"i\": 0, \"seccion\": \"Local\"}, ...]} "
@@ -81,9 +82,11 @@ _PALABRAS = (
                    r"rescat|operativo|atrapad"),
     ("Deportes", r"fútbol|futbol|liga |gol |goles|torneo|campeonat|partido|boxeo|básquet|basquet|tenis|golf|"
                  r"selecci[oó]n|mundial|atleta|piloto|rally|clásico|clasico|cinturon"),
+    ("Economía", r"dólar|dolar|inflaci|riesgo país|riesgo pais|salario|tarifa|empleo|banco|inversi|econom|"
+                 r"precios|vtv|rigi|exportaci|importaci|petr[oó]leo|cosecha|soja|aguinaldo|impuest|deuda|"
+                 r"mercado|bolsa|plazo fijo|jubilaci"),
     ("Política", r"diputad|senad|gobierno|intendente|concejo|concejal|elecciones|milei|kicillof|dnu|"
-                 r"congreso|ministr|presidente|peronismo|oposici|dólar|dolar|inflaci|riesgo país|riesgo pais|"
-                 r"salario|tarifa|empleo|banco|inversi|econom|precios|vtv"),
+                 r"congreso|ministr|presidente|peronismo|oposici"),
     ("Cultura", r"festival|música|musica|banda|concierto|teatro|libro|muestra|cine|artista|homenaje|"
                 r"tributo|martín fierro|martin fierro|show"),
     ("Tendencias", r"tecnolog|inteligencia artificial|celular|aplicaci|viral|tiktok|instagram|redes sociales|"

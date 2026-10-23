@@ -85,6 +85,86 @@ def fusionar_duplicados(cands: List[Dict]) -> List[Dict]:
     return resultado
 
 
+_NOMBRES_COMUNES = {"necoc", "quequ", "argen", "buenos", "provi", "munic", "conce"}
+
+
+def _nombres_propios(titulo: str) -> set:
+    """Raíces (5 letras) de las palabras en mayúscula que no abren el título: nombres de personas, lugares, obras."""
+    palabras = re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]+", titulo or "")[1:]
+    return {w.lower()[:5] for w in palabras if w[0].isupper() and len(w) > 3} - _NOMBRES_COMUNES
+
+
+def _misma_con_nombre_propio(a: str, b: str) -> bool:
+    """
+    Segundo criterio para títulos muy reescritos entre medios: comparten un nombre propio concreto
+    (p. ej. «Katopodis») y al menos 3 raíces en total, aunque eso sea menos de la mitad del título más corto.
+    """
+    ta, tb = _tokens(a), _tokens(b)
+    if not ta or not tb:
+        return False
+    comunes = ta & tb
+    nombres = (_nombres_propios(a) | _nombres_propios(b)) & comunes
+    return len(comunes) >= MIN_COMPARTIDOS and bool(nombres) and len(comunes) / min(len(ta), len(tb)) >= 0.3
+
+
+def _fuentes_de(notas: List[Dict]) -> set:
+    return {(n.get("fuente") or "").strip().lower() for n in notas} - {""}
+
+
+def planificar_fusion(grupos: List[Dict]) -> List[tuple]:
+    """
+    Decide qué grupos `raw` cuentan el mismo hecho en medios distintos y conviene unir.
+    Devuelve [(grupo destino, [grupos que se le suman])]. Manda el grupo con más fuentes. Dos grupos solo se
+    unen si NO comparten ningún medio (dos notas del mismo medio son notas distintas aunque se parezcan).
+    """
+    orden = sorted(grupos, key=lambda g: (-_n_fuentes(g["notas"]), g["grupo_id"]))
+    clusters: List[Dict] = []
+    for g in orden:
+        fuentes = _fuentes_de(g["notas"])
+        titulos = [n.get("titulo", "") for n in g["notas"]]
+        destino = next(
+            (c for c in clusters
+             if not (c["fuentes"] & fuentes)
+             and any(son_misma_noticia(t_c, t) or _misma_con_nombre_propio(t_c, t)
+                     for t_c in c["titulos"] for t in titulos)),
+            None,
+        )
+        if destino is None:
+            clusters.append({"grupo": g, "fuentes": set(fuentes), "titulos": list(titulos), "sumados": []})
+        else:
+            destino["fuentes"] |= fuentes
+            destino["titulos"] += titulos
+            destino["sumados"].append(g)
+    return [(c["grupo"], c["sumados"]) for c in clusters if c["sumados"]]
+
+
+def consolidar_grupos_raw(client, horas: int = 72) -> int:
+    """
+    Une en la Bandeja los grupos que son la misma noticia publicada por distintos medios (el agrupador del
+    scraper solo compara dentro de cada corrida, así que lo que llega en corridas distintas queda separado).
+    Reasigna `grupo_id` de las notas del grupo que se suma y les copia la predicción del grupo destino.
+    Devuelve cuántos grupos se unieron.
+    """
+    grupos = candidatos(client, horas=horas)
+    unidos = 0
+    for destino, sumados in planificar_fusion(grupos):
+        base = destino["notas"][0]
+        for g in sumados:
+            ids = [n["id"] for n in g["notas"]]
+            try:
+                client.client.table("noticias").update({
+                    "grupo_id": destino["grupo_id"],
+                    "seccion_prevista": base.get("seccion_prevista"),
+                    "prioridad": base.get("prioridad"),
+                }).in_("id", ids).eq("estado", "raw").execute()
+                unidos += 1
+                logger.info("Fusión automática: «%s» se suma a «%s»",
+                            (g["notas"][0].get("titulo") or "")[:60], (base.get("titulo") or "")[:60])
+            except Exception:
+                logger.exception("No se pudo fusionar el grupo %s", g["grupo_id"])
+    return unidos
+
+
 def inicio_dia_ar_utc() -> datetime:
     """Inicio del día argentino de hoy, en UTC."""
     ahora_ar = datetime.now(timezone.utc) - timedelta(hours=3)
@@ -556,7 +636,10 @@ def _preparar_manual(client, cfg: Dict, manual: Dict) -> Tuple[List[Dict], int, 
                 g["seccion"] = sec
         return grupos, len(grupos), True
     if manual.get("solo_hoy"):
-        ranking = ordenar(fusionar_duplicados(candidatos(client, desde=inicio_dia_ar_utc())), cfg)
+        # Con filtros en la Bandeja llegan los grupos visibles (`grupo_ids`); sin filtros, todos los de hoy.
+        ids_visibles = [str(g) for g in (manual.get("grupo_ids") or [])]
+        pool = candidatos(client, grupo_ids=ids_visibles) if ids_visibles else candidatos(client, desde=inicio_dia_ar_utc())
+        ranking = ordenar(fusionar_duplicados(pool), cfg)
         grupos = clasificar_pool(ranking[:MAX_A_CLASIFICAR], cfg)
         tope = int(manual.get("tope") or TOPE_MANUAL_DEFAULT)
         return grupos, max(1, min(tope, 20)), False

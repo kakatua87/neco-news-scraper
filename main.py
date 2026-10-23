@@ -605,6 +605,14 @@ def pipeline_scraping() -> None:
         _clasificar_pendientes(supabase_client)
     except Exception:
         logger.exception("No se pudo completar la predicción de las notas raw pendientes")
+    try:
+        import edicion_auto
+
+        fusionados = edicion_auto.consolidar_grupos_raw(supabase_client)
+        if fusionados:
+            logger.info("Fusión automática: %s grupos unidos a otro de un medio distinto", fusionados)
+    except Exception:
+        logger.exception("No se pudo consolidar los grupos duplicados entre medios")
     supabase_client.insertar_salud_fuentes(list(salud.values()))
     try:
         _avisar_fuentes_caidas(supabase_client, activas=set(salud))
@@ -980,7 +988,7 @@ def edicion_manual(body: Dict) -> Dict:
         return {"ok": False, "error": "indicá grupos (items) o solo_hoy"}
     if len(items) > 30:
         return {"ok": False, "error": "demasiados grupos seleccionados (máximo 30)"}
-    manual = {"items": items, "solo_hoy": solo_hoy, "tope": body.get("tope")}
+    manual = {"items": items, "solo_hoy": solo_hoy, "tope": body.get("tope"), "grupo_ids": body.get("grupo_ids") or []}
 
     if not _EDICION_LOCK.acquire(blocking=False):
         return {"ok": False, "error": "ya hay una edición en curso"}

@@ -189,6 +189,8 @@ PORT: int = int(os.getenv("PORT", "8000"))
 # Tope de grupos a procesar POR FUENTE en cada corrida (no global) -- ver
 # main.py:pipeline_scraping, seccion "Cupo por sitio".
 MAX_NOTES_PER_RUN: int = int(os.getenv("MAX_NOTES_PER_RUN", "12"))
+# Descartables (farándula, archivo, notas comerciales) que se guardan por fuente y corrida: ocultas en la Bandeja.
+MAX_DESCARTABLES_POR_FUENTE: int = int(os.getenv("MAX_DESCARTABLES_POR_FUENTE", "3"))
 AI_DELAY_SECONDS: float = float(os.getenv("AI_DELAY_SECONDS", "2.0"))
 SCHEDULER_INTERVAL_MINUTES: int = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "30"))
 

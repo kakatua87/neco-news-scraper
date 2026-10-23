@@ -172,6 +172,8 @@ DOMAIN_CONTENT_SELECTORS: Dict[str, List[str]] = {
 class NewsScraper:
     def __init__(self, existing_urls: Optional[Set[str]] = None) -> None:
         self.existing_urls = existing_urls or set()
+        # Por fuente: tarjetas halladas en la portada y notas nuevas. Lo lee pipeline_scraping para `fuentes_salud`.
+        self.metricas: Dict[str, Dict[str, int]] = {}
 
     def scrape_generic(self, url: str, fuente: str) -> List[Dict]:
         """
@@ -485,8 +487,8 @@ class NewsScraper:
 
                     # Sección
                     section_el = card.select_one(section_selector)
-                    seccion = section_el.get_text(" ", strip=True) if section_el else "General"
-                    seccion = self._normalize_section(seccion)
+                    etiqueta_original = section_el.get_text(" ", strip=True) if section_el else ""
+                    seccion = self._normalize_section(etiqueta_original or "General")
 
                     # Resumen/bajada de la card. No es el cuerpo completo, pero
                     # sirve de fallback en pipeline_scraping cuando la nota
@@ -499,6 +501,9 @@ class NewsScraper:
                         "url": url,
                         "imagen_url": imagen_url,
                         "seccion": seccion or "General",
+                        # Etiqueta tal cual la muestra el sitio ("Espectáculos", "Gente"…): _normalize_section la pierde
+                        # y sirve para detectar farándula al clasificar.
+                        "seccion_original": etiqueta_original,
                         "fuente": fuente,
                         "resumen": resumen,
                     })
@@ -533,6 +538,7 @@ class NewsScraper:
                     items_descartados_dedup,
                 )
         logger.info("Encontradas %s notas nuevas en %s", len(items), base_url)
+        self.metricas[fuente] = {"tarjetas": len(cards), "nuevas": len(items)}
         return items
 
     @staticmethod

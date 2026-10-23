@@ -99,7 +99,7 @@ def candidatos(client, horas: int = VENTANA_HORAS, desde: Optional[datetime] = N
     """
     consulta = (
         client.client.table("noticias")
-        .select("id, grupo_id, titulo, fuente, seccion, imagen_url, created_at")
+        .select("id, grupo_id, titulo, fuente, seccion, seccion_prevista, prioridad, imagen_url, created_at")
         .eq("estado", "raw")
         .not_.is_("grupo_id", "null")
     )
@@ -125,7 +125,16 @@ def puntuar(grupo: Dict, pesos: Dict, ahora: Optional[datetime] = None) -> float
     if any(n.get("imagen_url") for n in notas):
         score += pesos["imagen"]
     score += pesos["secciones"].get(notas[0].get("seccion"), 1.0)
+    # Lo prioritario (local, policiales, política, economía, zona) pesa más que lo medio.
+    if _prioridad_grupo(grupo) == 1:
+        score += 1.0
     return round(score, 3)
+
+
+def _prioridad_grupo(grupo: Dict) -> int:
+    """Prioridad cargada por el scraper (1 alta, 2 media, 3 descartable); 2 si todavía no fue clasificada."""
+    valores = [n.get("prioridad") for n in grupo["notas"] if n.get("prioridad")]
+    return min(valores) if valores else 2
 
 
 # Reparto de la edición: Locales y Policiales son lo principal; el resto de las secciones con
@@ -169,6 +178,7 @@ def ordenar(cands: List[Dict], cfg: Dict) -> List[Dict]:
         (
             g for g in cands
             if g["seccion"] not in excluidas
+            and _prioridad_grupo(g) != 3
             and not any(es_archivo_historico(n.get("titulo", "")) for n in g["notas"])
         ),
         key=lambda g: g["score"],
@@ -181,16 +191,36 @@ def clasificar_pool(pool: List[Dict], cfg: Dict) -> List[Dict]:
     Reemplaza la etiqueta del scraper por la sección real (por tema) y descarta las excluidas.
     La sección del scraper queda en `seccion_scraper`.
     """
-    import clasificador_secciones
-
-    secciones = clasificador_secciones.clasificar(
-        [{"titulo": g["notas"][0].get("titulo") or "", "etiqueta": g["seccion"]} for g in pool]
-    )
+    secciones = _secciones_de(pool, [g["seccion"] for g in pool])
     excluidas = set(cfg.get("edicion_secciones_excluidas") or SECCIONES_EXCLUIDAS_DEFAULT)
     for g, sec in zip(pool, secciones):
         g["seccion_scraper"] = g["seccion"]
         g["seccion"] = sec
     return [g for g in pool if g["seccion"] not in excluidas]
+
+
+def _prevista_de(grupo: Dict) -> Optional[str]:
+    """Sección que el scraper ya predijo para el grupo (se ignora 'Descartable', que no es una sección del portal)."""
+    for n in grupo["notas"]:
+        prev = n.get("seccion_prevista")
+        if prev and prev != "Descartable":
+            return prev
+    return None
+
+
+def _secciones_de(grupos: List[Dict], etiquetas: List[str]) -> List[str]:
+    """Sección de cada grupo: la prevista si existe; el resto, en una sola llamada al clasificador."""
+    import clasificador_secciones
+
+    resultado: List[Optional[str]] = [_prevista_de(g) for g in grupos]
+    faltan = [i for i, r in enumerate(resultado) if not r]
+    if faltan:
+        nuevas = clasificador_secciones.clasificar(
+            [{"titulo": grupos[i]["notas"][0].get("titulo") or "", "etiqueta": etiquetas[i] or ""} for i in faltan]
+        )
+        for i, sec in zip(faltan, nuevas):
+            resultado[i] = sec
+    return [r or "Local" for r in resultado]
 
 
 def siguiente_candidata(restantes: List[Dict], aprobadas_por_seccion: Dict[str, int]) -> Dict:
@@ -521,11 +551,7 @@ def _preparar_manual(client, cfg: Dict, manual: Dict) -> Tuple[List[Dict], int, 
         # La sección la decide la IA (ya no se elige a mano): una sola llamada para todo el lote.
         sin_seccion = [g for g in grupos if not g["seccion"]]
         if sin_seccion:
-            import clasificador_secciones
-
-            secciones = clasificador_secciones.clasificar(
-                [{"titulo": g["notas"][0].get("titulo") or "", "etiqueta": g["seccion_scraper"] or ""} for g in sin_seccion]
-            )
+            secciones = _secciones_de(sin_seccion, [g["seccion_scraper"] or "" for g in sin_seccion])
             for g, sec in zip(sin_seccion, secciones):
                 g["seccion"] = sec
         return grupos, len(grupos), True

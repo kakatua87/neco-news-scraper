@@ -175,20 +175,26 @@ _PROMPT = (
 )
 
 
-def _llm_json(mensajes: List[Dict], clave: str = "ok", max_tokens: int = 4096) -> Optional[Dict]:
-    """Gemini primero; si no responde, los respaldos (Groq gratis y después Claude, si hay clave)."""
-    parsed = _llm_json_gemini(mensajes, clave, max_tokens)
+def _llm_json(mensajes: List[Dict], clave: str = "ok", max_tokens: int = 4096, liviano: bool = False) -> Optional[Dict]:
+    """
+    Gemini primero; si no responde, los respaldos (Groq gratis y después Claude, si hay clave).
+    `liviano=True` prueba primero los modelos "lite" (para tareas masivas que no necesitan el más potente: la cuota diaria
+    del modelo grande es de solo 20 solicitudes).
+    """
+    parsed = _llm_json_gemini(mensajes, clave, max_tokens, liviano)
     if parsed is not None:
         return parsed
     return llm_respaldo.completar_json(mensajes, clave, max_tokens)
 
 
-def _llm_json_gemini(mensajes: List[Dict], clave: str = "ok", max_tokens: int = 4096) -> Optional[Dict]:
+def _llm_json_gemini(mensajes: List[Dict], clave: str = "ok", max_tokens: int = 4096, liviano: bool = False) -> Optional[Dict]:
     keys = config.gemini_keys_ordenadas()
     if not keys:
         return None
     base = config.AI_MODEL if config.AI_PROVIDER == "gemini" else config._PROVIDER_DEFAULTS["gemini"]["model"]
     modelos = [base] + [m for m in config.AI_FALLBACK_MODELS if m != base]
+    if liviano:
+        modelos = [m for m in modelos if "lite" in m] + [m for m in modelos if "lite" not in m]
     base_url = config._PROVIDER_DEFAULTS["gemini"]["base_url"]
     inicio = time.monotonic()  # tope de tiempo total: con Gemini saturado no debe frenar la edición
     for key in keys:

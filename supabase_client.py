@@ -6,7 +6,7 @@ Maneja inserción, consulta y actualización de noticias.
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 from supabase import Client, create_client
 
@@ -193,6 +193,11 @@ class SupabaseNewsClient:
             "es_portada": False,
             "grupo_id": datos.get("grupo_id"),
             "titulo_original": datos.get("titulo_original", ""),
+            # Predicción al ingresar (clasificador_secciones.clasificar_detallado): sección a la que iría, prioridad y,
+            # si es descartable, el motivo. Ver el filtro de la Bandeja.
+            "seccion_prevista": datos.get("seccion_prevista"),
+            "prioridad": datos.get("prioridad"),
+            "motivo_descarte": datos.get("motivo_descarte"),
         }
         try:
             response = self.client.table("noticias").insert(payload).execute()
@@ -207,6 +212,108 @@ class SupabaseNewsClient:
         except Exception:
             logger.exception("Error insertando noticia raw: url=%s", datos.get("url_original"))
             raise
+
+    # ─── Predicción de sección y salud de las fuentes ───────────────────────────────────
+
+    def get_raw_sin_prediccion(self, limite: int = 40) -> List[Dict]:
+        """Notas `raw` que todavía no tienen sección prevista (las que ya estaban en la Bandeja), de a un grupo."""
+        try:
+            filas = (
+                self.client.table("noticias")
+                .select("id, grupo_id, titulo, seccion, url_original, created_at")
+                .eq("estado", "raw")
+                .is_("seccion_prevista", "null")
+                .order("created_at", desc=True)
+                .limit(limite * 4)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            logger.exception("No se pudieron leer las notas raw sin predicción")
+            return []
+        grupos: Dict[str, List[Dict]] = {}
+        for f in filas:
+            grupos.setdefault(f.get("grupo_id") or f["id"], []).append(f)
+        return [notas[0] for notas in list(grupos.values())[:limite]]
+
+    def actualizar_prediccion(self, grupo_id: Optional[str], noticia_id: str, pred: Dict) -> None:
+        """Guarda la predicción en todas las notas raw del grupo (o en la nota si no tiene grupo)."""
+        datos = {
+            "seccion_prevista": pred.get("seccion_prevista"),
+            "prioridad": pred.get("prioridad"),
+            "motivo_descarte": pred.get("motivo_descarte"),
+        }
+        try:
+            q = self.client.table("noticias").update(datos).eq("estado", "raw")
+            (q.eq("grupo_id", grupo_id) if grupo_id else q.eq("id", noticia_id)).execute()
+        except Exception:
+            logger.exception("No se pudo guardar la predicción del grupo %s", grupo_id or noticia_id)
+
+    def insertar_salud_fuentes(self, filas: List[Dict]) -> None:
+        """Una fila por fuente y corrida en `fuentes_salud` (tarjetas, nuevas, guardadas, sin_cuerpo, bloqueadas, error)."""
+        if not filas:
+            return
+        try:
+            self.client.table("fuentes_salud").insert(filas).execute()
+        except Exception:
+            logger.exception("No se pudo guardar la salud de las fuentes")
+
+    def fuentes_pausadas(self, horas: int = 6) -> Set[str]:
+        """
+        Fuentes (por nombre) que en su última corrida de las últimas `horas` tuvieron notas bloqueadas y ninguna guardada:
+        se las deja descansar para no gastar minutos reintentando un sitio que bloquea al scraper. Pasado ese tiempo se
+        prueba de nuevo (una corrida de sondeo).
+        """
+        from datetime import timedelta
+
+        desde = (datetime.now(timezone.utc) - timedelta(hours=horas)).isoformat()
+        try:
+            filas = (
+                self.client.table("fuentes_salud")
+                .select("fuente, bloqueadas, guardadas, error, ts")
+                .gte("ts", desde)
+                .order("ts", desc=True)
+                .limit(400)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            logger.exception("No se pudo leer fuentes_salud")
+            return set()
+        ultima: Dict[str, Dict] = {}
+        for f in filas:
+            if f.get("error"):
+                continue  # marcas de pausa o errores: no son corridas reales
+            ultima.setdefault(f["fuente"], f)
+        return {
+            nombre for nombre, f in ultima.items()
+            if (f.get("bloqueadas") or 0) >= 2 and (f.get("guardadas") or 0) == 0
+        }
+
+    def fuentes_sin_notas(self, horas: int = 30) -> Dict[str, str]:
+        """Fuentes con corridas recientes pero ninguna nota guardada en las últimas `horas`. {fuente: ts de la última nota}"""
+        from datetime import timedelta
+
+        desde = (datetime.now(timezone.utc) - timedelta(hours=horas)).isoformat()
+        try:
+            filas = (
+                self.client.table("fuentes_salud")
+                .select("fuente, guardadas")
+                .gte("ts", desde)
+                .limit(2000)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            logger.exception("No se pudo leer fuentes_salud")
+            return {}
+        total: Dict[str, int] = {}
+        for f in filas:
+            total[f["fuente"]] = total.get(f["fuente"], 0) + (f.get("guardadas") or 0)
+        return {nombre: "" for nombre, n in total.items() if n == 0}
 
     def get_notas_by_grupo(self, grupo_id: str) -> List[Dict]:
         """Obtiene todas las notas raw de un grupo dado su grupo_id."""
@@ -230,7 +337,7 @@ class SupabaseNewsClient:
         try:
             response = (
                 self.client.table("noticias")
-                .select("id, titulo, cuerpo, fuente, imagen_url, seccion, url_original, estado")
+                .select("id, titulo, cuerpo, fuente, imagen_url, seccion, seccion_prevista, url_original, estado")
                 .in_("id", ids)
                 .execute()
             )

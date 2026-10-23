@@ -21,7 +21,7 @@ import time
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import requests
 
@@ -29,6 +29,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 import uvicorn
 
+import clasificador_secciones
 import config
 import uso_ia
 import pipeline_guard
@@ -308,6 +309,41 @@ def _group_by_similarity(
 
 # ─── FASE 1: Pipeline de scraping (sin IA) ───────────────────────
 
+def _clasificar_pendientes(sc, limite: int = 40) -> None:
+    """Predice la sección de hasta `limite` grupos `raw` que todavía no la tienen (lo que ya estaba en la Bandeja)."""
+    notas = sc.get_raw_sin_prediccion(limite)
+    if not notas:
+        return
+    preds = clasificador_secciones.clasificar_detallado([
+        {"titulo": n.get("titulo", ""), "etiqueta": n.get("seccion", ""), "url": n.get("url_original", ""),
+         "etiqueta_original": ""}
+        for n in notas
+    ])
+    for n, p in zip(notas, preds):
+        sc.actualizar_prediccion(n.get("grupo_id"), n["id"], p)
+    logger.info("Predicción de %s grupos raw que no la tenían", len(preds))
+
+
+def _avisar_fuentes_caidas(sc, activas: Set[str]) -> None:
+    """Aviso en la campana del admin si una fuente activa no guardó ninguna nota en 30 h (una vez por semana por fuente)."""
+    import edicion_auto
+    from datetime import timedelta
+
+    sin_notas = [n for n in sc.fuentes_sin_notas(horas=30) if n in activas]
+    if not sin_notas:
+        return
+    desde = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    ya = sc.client.table("admin_notificaciones").select("titulo").eq("tipo", "fuente").gte("ts", desde).execute().data or []
+    avisados = " ".join(x["titulo"] for x in ya)
+    for nombre in sin_notas:
+        if nombre in avisados:
+            continue
+        edicion_auto.notificar_admin(
+            sc, "fuente", f"La fuente {nombre} no trajo notas en las últimas 30 horas",
+            {"fuente": nombre, "sugerencia": "Revisá Configuración > Fuentes: puede estar bloqueando al scraper."},
+        )
+
+
 def pipeline_scraping() -> None:
     """
     Fase 1: Scrape → Dedup → Supabase (estado=raw) → notifica el portal (push).
@@ -358,6 +394,23 @@ def pipeline_scraping() -> None:
         source_map[key] = (lambda u=url, l=label: scraper.scrape_generic(u, l))
 
     fuentes_activas = cfg.get("fuentes_activas") or list(source_map.keys())
+    etiquetas_fuente = {
+        "nden": "NDEN", "diarionecochea": "Diario Necochea", "diario4v": "Diario 4V",
+        "tsn": "TSN Necochea", "diarionq": "Diario NQ", "elecos": "El Ecos",
+    }
+    for f in cfg.get("fuentes_custom") or []:
+        if f.get("key") and f.get("label"):
+            etiquetas_fuente[f["key"]] = f["label"]
+
+    # Fuentes que bloquearon las notas en su última corrida real descansan 6 h: reintentarlas a cada vuelta solo gasta
+    # minutos (Diario Necochea devuelve 403 en cada nota y cada intento tarda 30 s con el proxy).
+    pausadas = supabase_client.fuentes_pausadas(horas=6)
+    salud: Dict[str, Dict] = {}  # una fila de `fuentes_salud` por fuente
+
+    def _fila_salud(nombre: str) -> Dict:
+        return salud.setdefault(nombre, {
+            "fuente": nombre, "tarjetas": 0, "nuevas": 0, "guardadas": 0, "sin_cuerpo": 0, "bloqueadas": 0, "error": None,
+        })
 
     # ── Scraping de las fuentes activas ──────────────────────────
     raw_notes: List[Dict] = []
@@ -365,12 +418,22 @@ def pipeline_scraping() -> None:
         source_fn = source_map.get(key)
         if not source_fn:
             continue
+        nombre = etiquetas_fuente.get(key, key)
+        fila = _fila_salud(nombre)
+        if nombre in pausadas:
+            logger.warning("Fuente %s en pausa: bloqueó las notas en su última corrida; se reintenta pasadas 6 h.", nombre)
+            fila["error"] = "pausada (bloqueo)"
+            continue
         if i > 0:
             time.sleep(random.uniform(2.0, 6.0))
         try:
             raw_notes.extend(source_fn())
-        except Exception:
+        except Exception as e:
             logger.exception("Error en fuente=%s", key)
+            fila["error"] = str(e)[:200]
+        metricas = scraper.metricas.get(nombre) or {}
+        fila["tarjetas"] = metricas.get("tarjetas", 0)
+        fila["nuevas"] = metricas.get("nuevas", 0)
 
     logger.info("Notas candidatas scrapeadas: %s", len(raw_notes))
 
@@ -378,31 +441,57 @@ def pipeline_scraping() -> None:
     groups = _group_by_similarity(raw_notes)
     logger.info("Grupos tras dedup: %s (de %s notas)", len(groups), len(raw_notes))
 
+    # ── Predicción: a qué sección iría cada grupo y cuánta prioridad tiene ──
+    # Una sola llamada al modelo por corrida (más reglas sin costo para archivo, farándula y notas comerciales).
+    preds: Dict[int, Dict] = {}
+    nuevos = [g for g in groups if not all(n.get("url") in existing_urls for n in g)]
+    try:
+        resultados = clasificador_secciones.clasificar_detallado([
+            {"titulo": g[0].get("titulo", ""), "etiqueta": g[0].get("seccion", ""), "url": g[0].get("url", ""),
+             "etiqueta_original": g[0].get("seccion_original", "")}
+            for g in nuevos
+        ])
+        for g, p in zip(nuevos, resultados):
+            preds[id(g)] = p
+        cuenta = Counter(p["prioridad"] for p in resultados)
+        logger.info("Predicción: %s alta, %s media, %s descartables (de %s grupos nuevos)",
+                    cuenta.get(1, 0), cuenta.get(2, 0), cuenta.get(3, 0), len(nuevos))
+    except Exception:
+        logger.exception("No se pudo predecir la sección de los grupos nuevos; quedan para la próxima corrida")
+
     # ── Cupo por sitio ────────────────────────────────────────────
-    # MAX_NOTES_PER_RUN es un tope POR FUENTE (no global): antes, un sitio
-    # con mucho volumen en el tope de la lista (ej. NDEN, Diario4V) se comia
-    # el cupo entero de la corrida y dejaba a los demas (El Ecos, TSN,
-    # DiarioNQ, Neco24) sin procesar ninguna nota nueva aunque tuvieran
-    # varias esperando. Agrupando por la fuente del lider de cada grupo antes
-    # de cortar, cada sitio con novedades se lleva su propio cupo.
+    # MAX_NOTES_PER_RUN es un tope POR FUENTE (no global) y ahora cuenta notas realmente GUARDADAS: las que no se pueden
+    # bajar no ocupan lugar. Dentro de cada fuente se atiende primero lo prioritario (local, policiales, política,
+    # economía y zona), después lo medio y, con un tope chico, lo descartable; el orden de la portada se respeta
+    # dentro de cada prioridad.
     grupos_por_fuente: Dict[str, List] = {}
     for group in groups:
-        fuente_lider = group[0].get("fuente", "")
-        grupos_por_fuente.setdefault(fuente_lider, []).append(group)
-
-    grupos_a_procesar: List = []
-    for fuente_lider, grupos_fuente in grupos_por_fuente.items():
-        grupos_a_procesar.extend(grupos_fuente[: config.MAX_NOTES_PER_RUN])
+        grupos_por_fuente.setdefault(group[0].get("fuente", ""), []).append(group)
+    for lista in grupos_por_fuente.values():
+        lista.sort(key=lambda g: preds.get(id(g), {}).get("prioridad", 2))
+    grupos_a_procesar: List = [g for lista in grupos_por_fuente.values() for g in lista]
 
     logger.info(
-        "Grupos a procesar esta corrida: %s de %s totales (cupo=%s por fuente, %s fuentes con novedades)",
-        len(grupos_a_procesar), len(groups), config.MAX_NOTES_PER_RUN, len(grupos_por_fuente),
+        "Grupos a recorrer esta corrida: %s (cupo=%s por fuente, %s descartables por fuente, %s fuentes con novedades)",
+        len(grupos_a_procesar), config.MAX_NOTES_PER_RUN, config.MAX_DESCARTABLES_POR_FUENTE, len(grupos_por_fuente),
     )
 
     # ── Procesar cada grupo ──────────────────────────────────────
     saved = 0
+    guardados_por_fuente: Dict[str, int] = {}
+    descartables_por_fuente: Dict[str, int] = {}
+    fallos_seguidos: Dict[str, int] = {}
+    dominios_bloqueados: Set[str] = set()  # cortacircuitos: 2 notas seguidas sin poder bajarse
     for group in grupos_a_procesar:
         leader = group[0]
+        fuente_lider = leader.get("fuente", "")
+        pred = preds.get(id(group)) or {}
+        es_descartable = pred.get("prioridad") == 3
+        if es_descartable:
+            if descartables_por_fuente.get(fuente_lider, 0) >= config.MAX_DESCARTABLES_POR_FUENTE:
+                continue
+        elif guardados_por_fuente.get(fuente_lider, 0) >= config.MAX_NOTES_PER_RUN:
+            continue
         urls = [n["url"] for n in group if n.get("url")]
 
         # Saltar si ya procesamos todas las URLs del grupo
@@ -417,20 +506,24 @@ def pipeline_scraping() -> None:
             note_url = note.get("url")
             if not note_url or note_url in existing_urls:
                 continue
+            fila_nota = _fila_salud(note.get("fuente", ""))
             try:
-                try:
-                    article_data = scraper.get_article_content(note_url)
-                    texto = article_data.get("text", "") or ""
-                    imagen_art = (
-                        article_data.get("og_image")
-                        or article_data.get("content_image")
-                    )
-                except Exception:
-                    logger.warning(
-                        "get_article_content falló para %s; se intenta el resumen del listado.",
-                        note_url,
-                    )
-                    texto, imagen_art = "", None
+                dominio = scraper._get_domain(note_url)
+                intento = dominio not in dominios_bloqueados
+                texto, imagen_art = "", None
+                if intento:
+                    try:
+                        article_data = scraper.get_article_content(note_url)
+                        texto = article_data.get("text", "") or ""
+                        imagen_art = article_data.get("og_image") or article_data.get("content_image")
+                    except Exception:
+                        logger.warning(
+                            "get_article_content falló para %s; se intenta el resumen del listado.",
+                            note_url,
+                        )
+                        texto, imagen_art = "", None
+                else:
+                    logger.info("Dominio %s con bloqueo en esta corrida: se omite %s", dominio, note_url)
 
                 # Fallback: si la nota individual devolvió un 403 / página de
                 # challenge (o texto vacío), usar la bajada scrapeada del
@@ -449,7 +542,17 @@ def pipeline_scraping() -> None:
                             "Contenido insuficiente para %s y sin resumen de fallback, omitiendo.",
                             note_url,
                         )
+                        if intento:
+                            fila_nota["bloqueadas"] += 1
+                            fallos_seguidos[dominio] = fallos_seguidos.get(dominio, 0) + 1
+                            if fallos_seguidos[dominio] >= 2:
+                                dominios_bloqueados.add(dominio)
+                                logger.warning("Cortacircuitos: %s bloquea las notas; no se intentan más en esta corrida.", dominio)
+                        else:
+                            fila_nota["sin_cuerpo"] += 1
                         continue
+                elif intento:
+                    fallos_seguidos[dominio] = 0
 
                 imagen = imagen_art or note.get("imagen_url")
                 titulo_original = note.get("titulo", "")
@@ -463,10 +566,14 @@ def pipeline_scraping() -> None:
                     "imagen_url": imagen,
                     "slug": slug_from_url(note_url, titulo_original),
                     "grupo_id": grupo_id,
+                    "seccion_prevista": pred.get("seccion_prevista"),
+                    "prioridad": pred.get("prioridad"),
+                    "motivo_descarte": pred.get("motivo_descarte"),
                 }
                 insertada = supabase_client.insert_noticia_raw(datos_raw)
                 notas_insertadas.append(insertada)
                 existing_urls.add(note_url)
+                fila_nota["guardadas"] += 1
 
             except Exception:
                 logger.exception("Error guardando nota raw url=%s", note_url)
@@ -476,15 +583,30 @@ def pipeline_scraping() -> None:
             continue
 
         saved += 1
+        if es_descartable:
+            descartables_por_fuente[fuente_lider] = descartables_por_fuente.get(fuente_lider, 0) + 1
+        else:
+            guardados_por_fuente[fuente_lider] = guardados_por_fuente.get(fuente_lider, 0) + 1
         logger.info(
-            "Grupo guardado: grupo_id=%s | notas=%s | líder='%s'",
-            grupo_id, len(notas_insertadas), leader.get("titulo", "")[:60],
+            "Grupo guardado: grupo_id=%s | notas=%s | prevista=%s | líder='%s'",
+            grupo_id, len(notas_insertadas), pred.get("seccion_prevista") or "?", leader.get("titulo", "")[:60],
         )
 
         # ── Notificar al portal (push) ────────────────────────────
         notify_nuevo_grupo(len(notas_insertadas), leader.get("seccion", "Local"))
 
         time.sleep(1)  # Pausa mínima entre grupos
+
+    # ── Cierre: predicción de lo que ya estaba en la Bandeja, salud de las fuentes y avisos ──
+    try:
+        _clasificar_pendientes(supabase_client)
+    except Exception:
+        logger.exception("No se pudo completar la predicción de las notas raw pendientes")
+    supabase_client.insertar_salud_fuentes(list(salud.values()))
+    try:
+        _avisar_fuentes_caidas(supabase_client, activas=set(salud))
+    except Exception:
+        logger.exception("No se pudieron revisar las fuentes sin notas")
 
     logger.info("═══ pipeline_scraping finalizado. Grupos nuevos: %s ═══", saved)
 
@@ -580,13 +702,13 @@ def pipeline_ia(
     # Sin sección indicada (la bandeja ya no deja elegirla): la IA la decide entre las secciones del portal,
     # con el mismo clasificador por tema que usa la edición matutina.
     if not seccion:
+        prevista = next((n.get("seccion_prevista") for n in notas if n.get("seccion_prevista") not in (None, "", clasificador_secciones.SECCION_DESCARTABLE)), None)
         try:
-            import clasificador_secciones
-
-            seccion = clasificador_secciones.clasificar(
+            # La Bandeja ya muestra la sección prevista por el scraper: se reutiliza y se ahorra la llamada al modelo.
+            seccion = prevista or clasificador_secciones.clasificar(
                 [{"titulo": lider.get("titulo", ""), "etiqueta": lider.get("seccion") or ""}]
             )[0]
-            logger.info("Sección elegida por la IA: %s (grupo_id=%s)", seccion, grupo_id)
+            logger.info("Sección %s: %s (grupo_id=%s)", "prevista" if prevista else "elegida por la IA", seccion, grupo_id)
         except Exception:
             logger.exception("No se pudo clasificar la sección; se usa la del scraper")
             seccion = lider.get("seccion") or "Local"

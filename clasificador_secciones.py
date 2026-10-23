@@ -79,9 +79,11 @@ _PROMPT = (
 _PALABRAS = (
     ("Policiales", r"polic|detenid|arrest|robo|robaron|choc|choq|herid|accidente|homicid|asesin|secuestr|"
                    r"incendi|balacera|vuelc|despist|prefectura|fiscal|condena|estafa|narco|droga|apresad|"
+                   r"\brobar\b|\brobó\b|ladr[oó]n|aprehend|allanamient|detuvier|apu[ñn]al|balead|sustra[ií]d|hurto|"
                    r"rescat|operativo|atrapad"),
     ("Deportes", r"fútbol|futbol|liga |gol |goles|torneo|campeonat|partido|boxeo|básquet|basquet|tenis|golf|"
-                 r"selecci[oó]n|mundial|atleta|piloto|rally|clásico|clasico|cinturon"),
+                 r"selecci[oó]n|mundial|atleta|piloto|rally|clásico|clasico|cinturon|copa |boca|river plate|racing|"
+                 r"f[oó]rmula 1|colapinto|rugby|v[oó]ley|ciclismo|billar|automovilismo|venci[oó]|golea|empat[oó]"),
     ("Economía", r"dólar|dolar|inflaci|riesgo país|riesgo pais|salario|tarifa|empleo|banco|inversi|econom|"
                  r"precios|vtv|rigi|exportaci|importaci|petr[oó]leo|cosecha|soja|aguinaldo|impuest|deuda|"
                  r"mercado|bolsa|plazo fijo|jubilaci"),
@@ -150,3 +152,129 @@ def clasificar(items: List[Dict]) -> List[str]:
     if faltan:
         logger.warning("%s de %s notas sin clasificar por el modelo: palabras clave", faltan, len(items))
     return [r or por_palabras(it["titulo"], it.get("etiqueta", "")) for r, it in zip(resultado, items)]
+
+
+# ─── Predicción al ingresar: sección prevista, prioridad y descartables ──────────────────────────────
+
+PRIORIDAD_ALTA, PRIORIDAD_MEDIA, PRIORIDAD_DESCARTABLE = 1, 2, 3
+# Lo que el editor quiere ver primero: lo de acá y lo de la zona, policiales, política y economía.
+PRIORIDAD_POR_SECCION = {
+    "Local": PRIORIDAD_ALTA, "Policiales": PRIORIDAD_ALTA, "Política": PRIORIDAD_ALTA,
+    "Economía": PRIORIDAD_ALTA, "Zona": PRIORIDAD_ALTA,
+    "Deportes": PRIORIDAD_MEDIA, "Sociedad": PRIORIDAD_MEDIA, "Cultura": PRIORIDAD_MEDIA,
+    "Tendencias": PRIORIDAD_MEDIA, "Opinión": PRIORIDAD_MEDIA,
+}
+SECCION_DESCARTABLE = "Descartable"
+MOTIVOS_DESCARTE = {"espectaculos": "Espectáculos", "archivo": "Archivo histórico", "comercial": "Nota comercial"}
+
+_LUGARES_PROPIOS = re.compile(
+    r"necochea|quequ[eé]n|lober[ií]a|san cayetano|tres arroyos|balcarce|mar del plata|energ[ií]a|claraz|"
+    r"juan n\. fern|ram[oó]n santos|la dulce|nicanor olivera|costa bonita"
+)
+# Farándula y espectáculos "de afuera": solo cuenta si la nota NO nombra Necochea ni la zona (un recital o una obra
+# locales son Cultura).
+_FARANDULA = re.compile(
+    r"far[aá]ndula|vedette|\bactriz\b|\bactor\b|cantante|famos[oa]s?\b|celebrity|celebridad|\breality\b|gran hermano|"
+    r"masterchef|bailando por|netflix|streaming|telenovela|alfombra roja|chimento|exnovi[oa]|romance|infidelidad|"
+    r"separaci[oó]n de|premios (grammy|oscar|emmy|martin fierro|martín fierro|latin)|miss universo|rumores de|"
+    r"\brating\b|mirtha|tinelli|pampita|wanda nara|susana gim[eé]nez|justin bieber|taylor swift|\bbts\b|"
+    r"lollapalooza|shakira|madonna|bad bunny|ricardo arjona|alejandro sanz|luck ra|tini stoessel|\bkhea\b|\bu2\b"
+)
+_ETIQUETA_ESPECTACULOS = re.compile(r"espect|far[aá]ndula|celebr|famosos|televis|entreten")
+_URL_ESPECTACULOS = re.compile(r"/(espectaculos|far[aá]ndula|famosos|celebrities|entretenimiento|television)/")
+_COMERCIAL = re.compile(
+    r"publinota|contenido patrocinado|espacio publicitario|promoci[oó]n imperdible|\d+ ?% de descuento|"
+    r"aprovech[aá] (la|esta) (oferta|promo)|\bofertas? (de|por) (apertura|lanzamiento)|inauguramos|te espera en"
+)
+
+_PROMPT_DETALLADO = (
+    _PROMPT.split("Respondé SOLO JSON")[0]
+    + "Además hay dos categorías que NO son del diario y tienen prioridad sobre las demás cuando corresponden:\n"
+    "- Espectáculos: farándula, famosos y celebridades, TV, series y streaming, cine y música pop, chimentos, "
+    "conciertos o premios internacionales, muertes y romances de artistas. Una obra de teatro, un recital o un evento "
+    "cultural de Necochea o la zona NO es Espectáculos (va a Cultura o Local).\n"
+    "- Publicidad: notas comerciales que promocionan un comercio, marca o servicio.\n"
+    "Respondé SOLO JSON: {\"ok\": true, \"clasificacion\": [{\"i\": 0, \"seccion\": \"Local\"}, ...]} con una entrada "
+    "por cada nota, usando exactamente los nombres de la lista de secciones, o \"Espectáculos\" o \"Publicidad\"."
+)
+
+
+def descartable_por_reglas(titulo: str, url: str = "", etiqueta_original: str = "") -> Optional[str]:
+    """Motivo ('archivo', 'espectaculos', 'comercial') si la nota se descarta sin consultar al modelo; si no, None."""
+    from edicion_auto import es_archivo_historico  # import tardío: edicion_auto también usa este módulo
+
+    if es_archivo_historico(titulo):
+        return "archivo"
+    if _URL_ESPECTACULOS.search((url or "").lower()) or _ETIQUETA_ESPECTACULOS.search((etiqueta_original or "").lower()):
+        return "espectaculos"
+    t = _norm(titulo)
+    if _COMERCIAL.search(t):
+        return "comercial"
+    if _FARANDULA.search(t) and not _LUGARES_PROPIOS.search(t):
+        return "espectaculos"
+    return None
+
+
+def _resultado(seccion: str, motivo: Optional[str] = None) -> Dict:
+    if motivo:
+        return {"seccion_prevista": SECCION_DESCARTABLE, "prioridad": PRIORIDAD_DESCARTABLE, "motivo_descarte": motivo}
+    return {"seccion_prevista": seccion, "prioridad": PRIORIDAD_POR_SECCION.get(seccion, PRIORIDAD_MEDIA),
+            "motivo_descarte": None}
+
+
+def clasificar_detallado(items: List[Dict]) -> List[Dict]:
+    """
+    Predicción previa de cada grupo al ingresar a la Bandeja.
+    `items`: [{"titulo", "etiqueta" (la del scraper, normalizada), "url", "etiqueta_original"}].
+    Devuelve, por ítem y en orden, {"seccion_prevista", "prioridad" (1 alta, 2 media, 3 descartable), "motivo_descarte"}.
+    Primero reglas sin costo (archivo histórico, etiqueta/URL de espectáculos, farándula, nota comercial); lo que queda va al
+    modelo en UNA sola llamada (liviano primero). Si el modelo falla o no responde un ítem, se usan palabras clave.
+    """
+    if not items:
+        return []
+    salida: List[Optional[Dict]] = [None] * len(items)
+    pendientes: List[int] = []
+    for i, it in enumerate(items):
+        motivo = descartable_por_reglas(it.get("titulo", ""), it.get("url", ""), it.get("etiqueta_original", ""))
+        if motivo:
+            salida[i] = _resultado("", motivo)
+        else:
+            pendientes.append(i)
+
+    if pendientes:
+        try:
+            import fact_gate
+            import uso_ia
+
+            lista = "\n".join(
+                f"{n}. {items[i]['titulo'][:160]} (el scraper la marcó: {items[i].get('etiqueta') or '?'})"
+                for n, i in enumerate(pendientes)
+            )
+            with uso_ia.proposito("clasificador"):
+                parsed = fact_gate._llm_json(
+                    [{"role": "user", "content": f"{_PROMPT_DETALLADO}\n\nNOTAS:\n{lista}"}],
+                    clave="clasificacion", max_tokens=4096, liviano=True,
+                )
+            for fila in (parsed or {}).get("clasificacion", []) or []:
+                try:
+                    n, sec = int(fila["i"]), str(fila["seccion"]).strip()
+                except Exception:
+                    continue
+                if not 0 <= n < len(pendientes):
+                    continue
+                i = pendientes[n]
+                if sec.lower() in ("espectáculos", "espectaculos"):
+                    salida[i] = _resultado("", "espectaculos")
+                elif sec.lower() == "publicidad":
+                    salida[i] = _resultado("", "comercial")
+                elif sec in SECCIONES_VALIDAS:
+                    salida[i] = _resultado(sec)
+        except Exception:
+            logger.exception("Predicción con modelo falló; se usan palabras clave")
+
+    sin_modelo = [i for i in pendientes if salida[i] is None]
+    if sin_modelo:
+        logger.warning("%s de %s notas sin predicción del modelo: palabras clave", len(sin_modelo), len(items))
+    for i in sin_modelo:
+        salida[i] = _resultado(por_palabras(items[i]["titulo"], items[i].get("etiqueta", "")))
+    return [s for s in salida if s is not None]

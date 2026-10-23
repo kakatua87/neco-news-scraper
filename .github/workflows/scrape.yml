@@ -6,7 +6,7 @@ name: Scrape noticias (Fase 1)
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # cada 30 min UTC (best-effort: puede demorarse o saltear en horas pico)
+    - cron: "17 */2 * * *"   # cada 2 horas, al minuto 17 (fuera del pico de :00/:30, donde GitHub más demora o saltea)
   workflow_dispatch:
 
 concurrency:

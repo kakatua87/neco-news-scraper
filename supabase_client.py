@@ -209,7 +209,19 @@ class SupabaseNewsClient:
                 payload["slug"], payload["grupo_id"]
             )
             return rows[0]
-        except Exception:
+        except Exception as e:
+            if "noticias_slug_key" in str(e):
+                # Otra fuente (o una nota anterior) ya usa ese slug: se reintenta con un sufijo corto.
+                import uuid
+
+                payload["slug"] = f"{payload['slug']}-{uuid.uuid4().hex[:6]}"
+                try:
+                    rows = self.client.table("noticias").insert(payload).execute().data or []
+                    if rows:
+                        logger.info("Noticia raw insertada con slug alternativo: %s", payload["slug"])
+                        return rows[0]
+                except Exception:
+                    pass
             logger.exception("Error insertando noticia raw: url=%s", datos.get("url_original"))
             raise
 

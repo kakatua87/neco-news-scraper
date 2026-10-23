@@ -102,6 +102,11 @@ def _norm(t: str) -> str:
 
 def por_palabras(titulo: str, etiqueta_scraper: str = "") -> str:
     """Fallback sin modelo: Policiales y Deportes por palabras clave, Local por lugar, el resto por tema."""
+    return por_palabras_estricto(titulo) or normalizar_seccion(etiqueta_scraper)
+
+
+def por_palabras_estricto(titulo: str) -> Optional[str]:
+    """Como `por_palabras`, pero None si ninguna palabra clave ni lugar coincide (no adivina «Local»)."""
     t = _norm(titulo)
     for seccion, patron in _PALABRAS[:2]:  # Policiales, Deportes
         if re.search(patron, t):
@@ -114,7 +119,7 @@ def por_palabras(titulo: str, etiqueta_scraper: str = "") -> str:
     for seccion, patron in _PALABRAS[2:]:
         if re.search(patron, t):
             return seccion
-    return normalizar_seccion(etiqueta_scraper)
+    return None
 
 
 def clasificar(items: List[Dict]) -> List[str]:
@@ -222,6 +227,10 @@ def _resultado(seccion: str, motivo: Optional[str] = None) -> Dict:
             "motivo_descarte": None}
 
 
+TAMANO_LOTE = 40
+MAX_LOTES = 3
+
+
 def clasificar_detallado(items: List[Dict]) -> List[Dict]:
     """
     Predicción previa de cada grupo al ingresar a la Bandeja.
@@ -241,14 +250,18 @@ def clasificar_detallado(items: List[Dict]) -> List[Dict]:
         else:
             pendientes.append(i)
 
-    if pendientes:
+    # Lotes chicos: con cientos de títulos en una sola respuesta el modelo trunca el JSON o se pasa del límite de
+    # tokens por minuto. Lo que no entra en MAX_LOTES (o el modelo no responde) usa palabras clave y, si ni eso
+    # alcanza, queda «sin clasificar» hasta la próxima corrida (no se adivina «Local»).
+    for desde in range(0, min(len(pendientes), TAMANO_LOTE * MAX_LOTES), TAMANO_LOTE):
+        lote = pendientes[desde:desde + TAMANO_LOTE]
         try:
             import fact_gate
             import uso_ia
 
             lista = "\n".join(
                 f"{n}. {items[i]['titulo'][:160]} (el scraper la marcó: {items[i].get('etiqueta') or '?'})"
-                for n, i in enumerate(pendientes)
+                for n, i in enumerate(lote)
             )
             with uso_ia.proposito("clasificador"):
                 parsed = fact_gate._llm_json(
@@ -260,9 +273,9 @@ def clasificar_detallado(items: List[Dict]) -> List[Dict]:
                     n, sec = int(fila["i"]), str(fila["seccion"]).strip()
                 except Exception:
                     continue
-                if not 0 <= n < len(pendientes):
+                if not 0 <= n < len(lote):
                     continue
-                i = pendientes[n]
+                i = lote[n]
                 if sec.lower() in ("espectáculos", "espectaculos"):
                     salida[i] = _resultado("", "espectaculos")
                 elif sec.lower() == "publicidad":
@@ -270,11 +283,17 @@ def clasificar_detallado(items: List[Dict]) -> List[Dict]:
                 elif sec in SECCIONES_VALIDAS:
                     salida[i] = _resultado(sec)
         except Exception:
-            logger.exception("Predicción con modelo falló; se usan palabras clave")
+            logger.exception("Predicción con modelo falló para un lote")
 
     sin_modelo = [i for i in pendientes if salida[i] is None]
     if sin_modelo:
         logger.warning("%s de %s notas sin predicción del modelo: palabras clave", len(sin_modelo), len(items))
     for i in sin_modelo:
-        salida[i] = _resultado(por_palabras(items[i]["titulo"], items[i].get("etiqueta", "")))
+        sec = por_palabras_estricto(items[i]["titulo"])
+        if sec:
+            salida[i] = _resultado(sec)
+        else:
+            # Sin sección prevista (la Bandeja dice «Sin clasificar») y prioridad media: ni oculta ni destacada.
+            # La siguiente corrida la vuelve a intentar.
+            salida[i] = {"seccion_prevista": None, "prioridad": PRIORIDAD_MEDIA, "motivo_descarte": None}
     return [s for s in salida if s is not None]

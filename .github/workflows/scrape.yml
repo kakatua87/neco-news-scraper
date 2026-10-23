@@ -45,3 +45,12 @@ jobs:
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
         run: python main.py --scrape
+
+      # El scraper no tiene claves de IA: la predicción de sección de los grupos que las palabras clave no resolvieron
+      # la hace Render (que sí las tiene). Si Render está dormido tarda en despertar; un fallo acá no invalida la corrida.
+      - name: Clasificar pendientes (IA en Render)
+        continue-on-error: true
+        run: |
+          curl -fsS --retry 3 --retry-delay 20 --max-time 150 -X POST \
+            -H "Authorization: Bearer ${{ secrets.INTERNAL_API_SECRET }}" \
+            "${{ secrets.SCRAPER_URL }}/clasificar-pendientes?limite=120"

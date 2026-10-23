@@ -16,6 +16,10 @@ from clasificador_secciones import normalizar_seccion
 logger = logging.getLogger("neconews.supabase")
 
 
+class NotaDuplicada(Exception):
+    """La nota ya existe en la base (mismo slug que otra, de otra fuente o de una corrida anterior)."""
+
+
 class SupabaseNewsClient:
     def __init__(self) -> None:
         url = config.SUPABASE_URL
@@ -211,17 +215,16 @@ class SupabaseNewsClient:
             return rows[0]
         except Exception as e:
             if "noticias_slug_key" in str(e):
-                # Otra fuente (o una nota anterior) ya usa ese slug: se reintenta con un sufijo corto.
+                # Mismo título que una nota que ya está en la base (típico: la misma gacetilla en dos medios).
+                # Se la guarda como descartada, con slug alternativo, para que su URL no se vuelva a bajar en cada corrida.
                 import uuid
 
-                payload["slug"] = f"{payload['slug']}-{uuid.uuid4().hex[:6]}"
+                payload.update(estado="descartada", slug=f"{payload['slug']}-{uuid.uuid4().hex[:6]}")
                 try:
-                    rows = self.client.table("noticias").insert(payload).execute().data or []
-                    if rows:
-                        logger.info("Noticia raw insertada con slug alternativo: %s", payload["slug"])
-                        return rows[0]
+                    self.client.table("noticias").insert(payload).execute()
                 except Exception:
-                    pass
+                    logger.warning("No se pudo registrar el duplicado url=%s", datos.get("url_original"))
+                raise NotaDuplicada(payload["slug"]) from e
             logger.exception("Error insertando noticia raw: url=%s", datos.get("url_original"))
             raise
 

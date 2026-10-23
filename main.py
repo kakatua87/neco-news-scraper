@@ -36,7 +36,7 @@ import pipeline_guard
 from ai_processor import AIProcessor
 from scraper import NewsScraper
 from services_scraper import ServicesScraper
-from supabase_client import SupabaseNewsClient
+from supabase_client import NotaDuplicada, SupabaseNewsClient
 
 # ─── Logging ─────────────────────────────────────────────────────
 if not logging.getLogger().handlers:
@@ -575,6 +575,9 @@ def pipeline_scraping() -> None:
                 existing_urls.add(note_url)
                 fila_nota["guardadas"] += 1
 
+            except NotaDuplicada:
+                existing_urls.add(note_url)
+                logger.info("Nota duplicada por título (ya existe en la base), se omite: %s", note_url)
             except Exception:
                 logger.exception("Error guardando nota raw url=%s", note_url)
 
@@ -843,6 +846,18 @@ async def debug_env() -> Dict:
 async def ai_providers() -> Dict:
     """Lista los proveedores de IA con API key configurada (para el selector del admin)."""
     return {"providers": config.list_available_providers()}
+
+
+@app.post("/clasificar-pendientes", dependencies=[Depends(require_internal_secret)])
+def clasificar_pendientes_endpoint(limite: int = 120) -> Dict:
+    """
+    Predice la sección de los grupos `raw` que todavía no la tienen. El scraper (GitHub Actions) no tiene claves de IA:
+    el workflow llama acá al terminar, y Render, que sí las tiene, hace la clasificación con el modelo.
+    """
+    sc = SupabaseNewsClient()
+    pendientes = len(sc.get_raw_sin_prediccion(limite))
+    _clasificar_pendientes(sc, limite=min(max(limite, 1), 120))
+    return {"ok": True, "revisados": pendientes, "faltan": len(sc.get_raw_sin_prediccion(limite))}
 
 
 @app.post("/procesar-grupo", dependencies=[Depends(require_internal_secret)])

@@ -31,6 +31,7 @@ import uvicorn
 
 import clasificador_secciones
 import config
+import fechas_notas
 import uso_ia
 import pipeline_guard
 from ai_processor import AIProcessor
@@ -409,7 +410,7 @@ def pipeline_scraping() -> None:
 
     def _fila_salud(nombre: str) -> Dict:
         return salud.setdefault(nombre, {
-            "fuente": nombre, "tarjetas": 0, "nuevas": 0, "guardadas": 0, "sin_cuerpo": 0, "bloqueadas": 0, "error": None,
+            "fuente": nombre, "tarjetas": 0, "nuevas": 0, "guardadas": 0, "sin_cuerpo": 0, "bloqueadas": 0, "viejas": 0, "error": None,
         })
 
     # ── Scraping de las fuentes activas ──────────────────────────
@@ -507,13 +508,21 @@ def pipeline_scraping() -> None:
             if not note_url or note_url in existing_urls:
                 continue
             fila_nota = _fila_salud(note.get("fuente", ""))
+            hoy = fechas_notas.hoy_ar()
+            # Solo noticias del día: el permalink de algunos medios ya trae la fecha y evita bajar la nota.
+            fecha_url = fechas_notas.fecha_desde_url(note_url)
+            if fecha_url and fecha_url != hoy:
+                fila_nota["viejas"] += 1
+                logger.info("Nota de otro día (%s) según su URL, se omite: %s", fecha_url, note_url)
+                continue
             try:
                 dominio = scraper._get_domain(note_url)
                 intento = dominio not in dominios_bloqueados
-                texto, imagen_art = "", None
+                texto, imagen_art, fecha_nota = "", None, None
                 if intento:
                     try:
                         article_data = scraper.get_article_content(note_url)
+                        fecha_nota = article_data.get("fecha")
                         texto = article_data.get("text", "") or ""
                         imagen_art = article_data.get("og_image") or article_data.get("content_image")
                     except Exception:
@@ -524,6 +533,26 @@ def pipeline_scraping() -> None:
                         texto, imagen_art = "", None
                 else:
                     logger.info("Dominio %s con bloqueo en esta corrida: se omite %s", dominio, note_url)
+
+                if intento and texto and not fecha_nota and not fecha_url:
+                    logger.info("Sin fecha de publicación detectable (se acepta): %s", note_url)
+
+                # Nota publicada otro día: no se guarda en la Bandeja (contradecía a notas más actuales). Se registra como
+                # descartada, con el motivo, para que su URL no se vuelva a bajar en cada corrida.
+                if fecha_nota and fecha_nota != hoy.isoformat():
+                    fila_nota["viejas"] += 1
+                    logger.info("Nota publicada el %s (no es de hoy), se descarta: %s", fecha_nota, note_url)
+                    try:
+                        supabase_client.insert_noticia_raw({
+                            "titulo_original": note.get("titulo", ""), "cuerpo": texto, "seccion": note.get("seccion", "Local"),
+                            "fuente": note.get("fuente", ""), "url_original": note_url, "imagen_url": None,
+                            "slug": slug_from_url(note_url, note.get("titulo", "")), "grupo_id": None,
+                            "estado": "descartada", "auto_motivo": f"Publicada el {fecha_nota}: no es del día",
+                        })
+                    except Exception:
+                        logger.debug("No se pudo registrar la nota vieja %s", note_url)
+                    existing_urls.add(note_url)
+                    continue
 
                 # Fallback: si la nota individual devolvió un 403 / página de
                 # challenge (o texto vacío), usar la bajada scrapeada del

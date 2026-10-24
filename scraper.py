@@ -25,6 +25,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import Browser, Page, sync_playwright
 
 import config
+import fechas_notas
 import url_segura
 
 logger = logging.getLogger("neconews.scraper")
@@ -286,7 +287,8 @@ class NewsScraper:
     def get_article_content(self, url: str) -> Dict:
         """
         Extrae el cuerpo completo y metadatos de imagen de una nota individual.
-        Retorna dict: {"text": str, "og_image": str|None, "content_image": str|None}
+        Retorna dict: {"text": str, "og_image": str|None, "content_image": str|None, "fecha": "YYYY-MM-DD"|None}
+        (`fecha` = día argentino de publicación, ver fechas_notas)
         """
         logger.info("Extrayendo cuerpo completo: %s", url)
         domain = self._get_domain(url)
@@ -306,7 +308,9 @@ class NewsScraper:
 
                 og_image = self._extract_og_image(html, url)
                 content_image = self._extract_content_image(html, domain, url)
-                return {"text": text, "og_image": og_image, "content_image": content_image}
+                fecha = fechas_notas.extraer_fecha(html, url)
+                return {"text": text, "og_image": og_image, "content_image": content_image,
+                        "fecha": fecha.isoformat() if fecha else None}
             finally:
                 browser.close()
 
@@ -333,11 +337,13 @@ class NewsScraper:
 
                     og_image = self._extract_og_image(html, url)
                     content_image = self._extract_content_image(html, domain, url)
+                    fecha = fechas_notas.extraer_fecha(html, url)
                     results.append({
                         "url": url,
                         "text": text,
                         "og_image": og_image,
-                        "content_image": content_image
+                        "content_image": content_image,
+                        "fecha": fecha.isoformat() if fecha else None,
                     })
                 except Exception as e:
                     logger.warning("Error extrayendo %s: %s", url, e)

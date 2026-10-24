@@ -186,7 +186,7 @@ class SupabaseNewsClient:
             "cuerpo": datos.get("cuerpo", "").strip(),
             "resumen_seo": "",
             "seccion": datos.get("seccion", "Local"),
-            "estado": "raw",
+            "estado": datos.get("estado", "raw"),
             "fuente": datos.get("fuente", ""),
             "url_original": datos.get("url_original"),
             "imagen_url": datos.get("imagen_url"),
@@ -203,6 +203,8 @@ class SupabaseNewsClient:
             "prioridad": datos.get("prioridad"),
             "motivo_descarte": datos.get("motivo_descarte"),
         }
+        if datos.get("auto_motivo"):
+            payload["auto_motivo"] = datos["auto_motivo"]
         try:
             response = self.client.table("noticias").insert(payload).execute()
             rows = response.data or []

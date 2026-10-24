@@ -136,6 +136,18 @@ def _visible(soup: BeautifulSoup) -> List[date]:
     return halladas
 
 
+def _solo_hora_tras_titulo(soup: BeautifulSoup) -> bool:
+    """Necochea Digital muestra solo la hora («08:33») junto al título de las notas de hoy y la fecha completa en las demás."""
+    h1 = soup.find("h1")
+    if not h1:
+        return False
+    for texto in h1.find_all_next(string=True):
+        if h1 in texto.parents or not texto.strip():
+            continue
+        return bool(re.match(r"\s*([01]?\d|2[0-3]):[0-5]\d", texto))
+    return False
+
+
 # Medios cuyo JSON-LD/meta no sirve (informa la hora de renderizado, no la de publicación).
 _SIN_METADATOS = ("necocheadigital.com",)
 
@@ -149,6 +161,8 @@ def extraer_fecha(html: str, url: str = "") -> Optional[date]:
         if f:
             candidatas.append(f)
     candidatas += _visible(soup)
+    if not candidatas and "necocheadigital.com" in (url or "") and _solo_hora_tras_titulo(soup):
+        candidatas.append(hoy_ar())
     f = fecha_desde_url(url)
     if f:
         candidatas.append(f)

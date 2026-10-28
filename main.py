@@ -27,6 +27,7 @@ import requests
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 import uvicorn
 
 import clasificador_secciones
@@ -922,7 +923,9 @@ async def procesar_grupo(request: Request) -> Dict:
         return {"ok": False, "error": "fuentes_ids no puede estar vacío"}
 
     try:
-        result = pipeline_ia(grupo_id, fuentes_ids, imagen_url, seccion, provider=provider)
+        # En el threadpool: pipeline_ia bloquea minutos (reintentos de Gemini) y en el hilo del loop frenaba
+        # /health y cualquier otro pedido, que el portal veía como 504.
+        result = await run_in_threadpool(pipeline_ia, grupo_id, fuentes_ids, imagen_url, seccion, provider=provider)
         return result
     except Exception as e:
         logger.exception("Error en /procesar-grupo grupo_id=%s", grupo_id)
@@ -1183,7 +1186,7 @@ async def procesar_redaccion(request: Request) -> Dict:
 
     try:
         ai = AIProcessor(provider=provider)
-        result = ai.process_redaccion_draft(titulo, cuerpo, seccion)
+        result = await run_in_threadpool(ai.process_redaccion_draft, titulo, cuerpo, seccion)
         return {"ok": True, **result}
     except Exception as e:
         logger.exception("Error en /procesar-redaccion")
@@ -1213,7 +1216,7 @@ async def procesar_tip(request: Request) -> Dict:
 
     try:
         ai = AIProcessor(provider=provider)
-        result = ai.process_citizen_tip(mensaje, categoria, contacto_nombre, imagenes_urls, fecha_aviso)
+        result = await run_in_threadpool(ai.process_citizen_tip, mensaje, categoria, contacto_nombre, imagenes_urls, fecha_aviso)
         return {"ok": True, **result}
     except Exception as e:
         logger.exception("Error en /procesar-tip")

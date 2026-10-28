@@ -35,6 +35,7 @@ import config
 import fechas_notas
 import uso_ia
 import pipeline_guard
+import trabajos_ia
 from ai_processor import AIProcessor
 from scraper import NewsScraper
 from services_scraper import ServicesScraper
@@ -922,13 +923,19 @@ async def procesar_grupo(request: Request) -> Dict:
     if not fuentes_ids:
         return {"ok": False, "error": "fuentes_ids no puede estar vacío"}
 
+    # Se registra el trabajo para avisar (campana del panel) si queda sin procesar, aunque el navegador esté cerrado.
+    seguimiento = SupabaseNewsClient()
+    trabajo_id = trabajos_ia.iniciar(seguimiento, "bandeja", grupo_id, {"fuentes_ids": fuentes_ids})
     try:
         # En el threadpool: pipeline_ia bloquea minutos (reintentos de Gemini) y en el hilo del loop frenaba
         # /health y cualquier otro pedido, que el portal veía como 504.
         result = await run_in_threadpool(pipeline_ia, grupo_id, fuentes_ids, imagen_url, seccion, provider=provider)
+        trabajos_ia.terminar(seguimiento, trabajo_id, bool(result.get("ok")), str(result.get("error") or ""),
+                             grupo_id=grupo_id)
         return result
     except Exception as e:
         logger.exception("Error en /procesar-grupo grupo_id=%s", grupo_id)
+        trabajos_ia.terminar(seguimiento, trabajo_id, False, str(e), grupo_id=grupo_id)
         return {"ok": False, "error": str(e)}
 
 
@@ -981,16 +988,15 @@ def edicion_matutina(dry_run: bool = False, solo_si_no_corrio: bool = False) -> 
                 logger.warning("Autoping a %s/health falló", url)
 
     def _correr() -> None:
+        seguimiento = SupabaseNewsClient()
+        trabajo_id = trabajos_ia.iniciar(seguimiento, "edicion", None, {"modo": "matutina"})
         try:
             resumen = edicion_auto.ejecutar_edicion(SupabaseNewsClient(), pipeline_ia)
             logger.info("Edición matutina finalizada: %s", {k: v for k, v in resumen.items() if k != "items"})
+            trabajos_ia.terminar(seguimiento, trabajo_id, True)
         except Exception as e:
             logger.exception("Error en la edición matutina")
-            try:
-                edicion_auto.notificar_admin(SupabaseNewsClient(), "error", "La edición matutina falló",
-                                             {"error": str(e)[:300]})
-            except Exception:
-                pass
+            trabajos_ia.terminar(seguimiento, trabajo_id, False, str(e), aviso=f"La edición matutina falló: {str(e)[:160]}")
         finally:
             terminada.set()
             _EDICION_LOCK.release()
@@ -1040,18 +1046,17 @@ def edicion_manual(body: Dict) -> Dict:
                 logger.warning("Autoping a %s/health falló", url)
 
     def _correr() -> None:
+        seguimiento = SupabaseNewsClient()
+        trabajo_id = trabajos_ia.iniciar(seguimiento, "edicion", None, {"modo": "manual", "grupos": len(items)})
         try:
             resumen = edicion_auto.ejecutar_edicion(SupabaseNewsClient(), pipeline_ia, manual=manual)
             logger.info("Edición manual finalizada: %s", {k: v for k, v in resumen.items() if k != "items"})
             _ULTIMA_MANUAL["resumen"] = resumen
+            trabajos_ia.terminar(seguimiento, trabajo_id, True)
         except Exception as e:
             logger.exception("Error en la edición manual")
             _ULTIMA_MANUAL["resumen"] = {"ok": False, "error": str(e)[:200]}
-            try:
-                edicion_auto.notificar_admin(SupabaseNewsClient(), "error", "La edición manual falló",
-                                             {"error": str(e)[:300]})
-            except Exception:
-                pass
+            trabajos_ia.terminar(seguimiento, trabajo_id, False, str(e), aviso=f"La edición manual falló: {str(e)[:160]}")
         finally:
             _ULTIMA_MANUAL["fin"] = datetime.now(timezone.utc).isoformat()
             terminada.set()
@@ -1267,6 +1272,8 @@ async def manual_limpieza() -> Dict:
 
 @app.on_event("startup")
 def on_startup() -> None:
+    # Un trabajo de IA que figure "procesando" quedó cortado por el reinicio: se avisa para volver a procesarlo.
+    trabajos_ia.revisar_interrumpidos(SupabaseNewsClient())
     # El scheduling de producción vive en GitHub Actions (workflows scrape.yml /
     # services.yml). El APScheduler in-process solo tiene sentido en un host
     # 24/7 real (Fly, Render pago); en Render Free el proceso se duerme a los

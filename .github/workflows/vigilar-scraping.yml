@@ -1,0 +1,35 @@
+name: Vigilar scraping
+
+# Avisa en la campana de /admin si el scraping lleva más de 4 h sin correr (corre cada 2 h; GitHub Actions puede saltear
+# los crons programados). No scrapea ni usa IA: solo mira `fuentes_salud`. Es un workflow aparte para que
+# no dependa de que `scrape.yml` haya corrido.
+
+on:
+  schedule:
+    - cron: "23 * * * *"   # cada hora, en un minuto poco usado
+  workflow_dispatch:
+
+concurrency:
+  group: vigilar-scraping
+  cancel-in-progress: false
+
+jobs:
+  vigilar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Vigilar atraso del scraping
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python main.py --vigilar

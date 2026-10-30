@@ -347,6 +347,40 @@ def _avisar_fuentes_caidas(sc, activas: Set[str]) -> None:
         )
 
 
+def vigilar_atraso_scraper(sc, horas: float = 4.0, repetir_cada_horas: float = 4.0) -> bool:
+    """
+    Aviso en la campana del admin si el scraping no corre hace más de `horas` (GitHub Actions saltea crons programados).
+    Mide la última fila de `fuentes_salud`, que cada corrida escribe aunque no traiga notas. Si el scraper está
+    desactivado desde /admin no avisa, y repite el aviso como mucho cada `repetir_cada_horas`. Devuelve si avisó.
+    """
+    import edicion_auto
+    from datetime import timedelta
+
+    try:
+        if not sc.get_scraper_config().get("activo", True):
+            return False
+        ultima = sc.ultima_corrida_scraper()
+        if ultima is None:
+            return False
+        ahora = datetime.now(timezone.utc)
+        atraso = (ahora - ultima).total_seconds() / 3600
+        if atraso < horas:
+            return False
+        desde = (ahora - timedelta(hours=repetir_cada_horas)).isoformat()
+        ya = sc.client.table("admin_notificaciones").select("id").eq("tipo", "scraper_atrasado").gte("ts", desde).limit(1).execute().data
+        if ya:
+            return False
+        edicion_auto.notificar_admin(
+            sc, "scraper_atrasado", f"El scraping no corre hace {atraso:.0f} horas: no están entrando noticias nuevas",
+            {"ultima_corrida": ultima.isoformat(), "sugerencia": "Revisá GitHub Actions > Scrape noticias y lanzá una corrida manual (Run workflow)."},
+        )
+        logger.warning("Scraping atrasado %.1f h: aviso enviado al admin.", atraso)
+        return True
+    except Exception:
+        logger.exception("No se pudo vigilar el atraso del scraping")
+        return False
+
+
 def pipeline_scraping() -> None:
     """
     Fase 1: Scrape → Dedup → Supabase (estado=raw) → notifica el portal (push).
@@ -363,6 +397,8 @@ def pipeline_scraping() -> None:
         return
 
     # ── Config del scraper (controlada desde /admin) ─────────────
+    vigilar_atraso_scraper(supabase_client)  # si hubo un hueco largo antes de esta corrida, queda el aviso
+
     cfg = supabase_client.get_scraper_config()
     if not cfg.get("activo", True):
         logger.info("Scraper desactivado desde el panel admin. Se salta esta corrida.")
@@ -1370,12 +1406,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Neco News Scraper v3")
     parser.add_argument("--scrape", action="store_true", help="Ejecuta pipeline_scraping() y termina.")
     parser.add_argument("--services", action="store_true", help="Ejecuta ServicesScraper().update_services() y termina.")
+    parser.add_argument("--vigilar", action="store_true", help="Avisa en /admin si el scraping lleva más de 4 h sin correr y termina.")
     parser.add_argument("--smoke", action="store_true", help="Test de conectividad con IA y termina.")
     args = parser.parse_args()
 
     # --scrape y --services no tocan la IA: no exigir la API key del proveedor
     # (así el job de GitHub Actions no necesita cargar esos secrets).
-    require_ai = not (args.scrape or args.services)
+    require_ai = not (args.scrape or args.services or args.vigilar)
     if not config.validate(require_ai=require_ai):
         sys.exit(1)
 
@@ -1394,6 +1431,10 @@ if __name__ == "__main__":
 
     if args.services:
         ServicesScraper().update_services()
+        sys.exit(0)
+
+    if args.vigilar:
+        vigilar_atraso_scraper(SupabaseNewsClient())
         sys.exit(0)
 
     uvicorn.run("main:app", host="0.0.0.0", port=config.PORT, reload=False)

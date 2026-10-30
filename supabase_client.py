@@ -309,6 +309,17 @@ class SupabaseNewsClient:
             if (f.get("bloqueadas") or 0) >= 2 and (f.get("guardadas") or 0) == 0
         }
 
+    def ultima_corrida_scraper(self) -> Optional[datetime]:
+        """Momento de la última corrida de scraping (la fila más reciente de `fuentes_salud`), o None si no hay datos."""
+        try:
+            filas = self.client.table("fuentes_salud").select("ts").order("ts", desc=True).limit(1).execute().data or []
+        except Exception:
+            logger.exception("No se pudo leer fuentes_salud")
+            return None
+        if not filas:
+            return None
+        return datetime.fromisoformat(str(filas[0]["ts"]).replace("Z", "+00:00"))
+
     def fuentes_sin_notas(self, horas: int = 30) -> Dict[str, str]:
         """Fuentes con corridas recientes pero ninguna nota guardada en las últimas `horas`. {fuente: ts de la última nota}"""
         from datetime import timedelta

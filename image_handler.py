@@ -5,7 +5,8 @@ Módulo para descargar imágenes de URLs externas y subirlas a Supabase Storage.
 import hashlib
 import io
 import logging
-from typing import Optional, Tuple
+import re
+from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -15,6 +16,35 @@ from PIL import Image
 import config
 
 logger = logging.getLogger("neconews.image_handler")
+
+
+# Las portadas de los medios muestran miniaturas; la foto original está en la misma carpeta o en el CDN sin la
+# transformación. Estas reglas arman la URL de mayor resolución (se prueba primero y, si falla, se usa la original).
+_RE_CDN_REDIMENSIONADO = re.compile(r"^https?://cdnartic\.ar/.*?/filters:[^/]*/(https?://.+)$", re.IGNORECASE)
+_RE_SUFIJO_WP = re.compile(r"-\d{2,4}x\d{2,4}(\.(?:jpe?g|png|webp))$", re.IGNORECASE)
+_RE_SUFIJO_OG = re.compile(r"-OG(\.(?:jpe?g|png|webp))$", re.IGNORECASE)
+
+
+def urls_alta_resolucion(url: str) -> List[str]:
+    """
+    Variantes de mayor resolución de la misma foto, de la mejor a la peor, sin incluir la URL original:
+    - cdnartic.ar (El Ecos): `.../768x0/filters:...quality(60)/https://origen/foto.webp` → la foto de origen (1600 px).
+    - WordPress: `foto-750x375.jpg` → `foto.jpg` (solo bajo /wp-content/uploads/).
+    - `foto-OG.jpg` (recorte 1200×630 para redes) → `foto.jpg`, la foto completa sin recortar.
+    """
+    candidatas: List[str] = []
+    actual = url
+    m = _RE_CDN_REDIMENSIONADO.match(actual)
+    if m:
+        actual = m.group(1)
+        candidatas.append(actual)
+    if "/wp-content/uploads/" in actual:
+        sin_og = _RE_SUFIJO_OG.sub(r"\1", actual)
+        sin_tam = _RE_SUFIJO_WP.sub(r"\1", sin_og)
+        for c in (sin_tam, sin_og):
+            if c != url and c not in candidatas:
+                candidatas.append(c)
+    return [c for c in candidatas if c != url]
 
 
 def con_logo_del_medio(url: Optional[str]) -> bool:
@@ -123,9 +153,11 @@ def _sin_metadatos(datos: bytes, content_type: str) -> Optional[bytes]:
             if content_type == "image/png":
                 img.save(salida, format="PNG", optimize=True)
             elif content_type == "image/webp":
-                img.save(salida, format="WEBP", quality=90)
+                img.save(salida, format="WEBP", quality=95)
             else:
-                img.convert("RGB").save(salida, format="JPEG", quality=90, optimize=True)
+                # "keep" (conserva el submuestreo de color del original) solo se permite sobre el JPEG sin convertir.
+                rgb = img if img.mode == "RGB" else img.convert("RGB")
+                rgb.save(salida, format="JPEG", quality=95, subsampling="keep" if rgb.format == "JPEG" else 0, optimize=True)
             return salida.getvalue()
     except Exception:
         logger.exception("Error re-codificando imagen")
@@ -138,11 +170,23 @@ class ImageHandler:
 
     def _preparar(self, image_url: str) -> Optional[Tuple[bytes, str, str]]:
         """
-        Descarga la imagen y le quita los metadatos.
-        Devuelve (contenido, content_type, extensión) o None si no se pudo.
+        Descarga la imagen (probando antes su versión de mayor resolución, si el medio la sirve) y le quita los
+        metadatos. Devuelve (contenido, content_type, extensión) o None si no se pudo.
         """
         if not image_url or not image_url.startswith("http"):
             return None
+        for candidata in urls_alta_resolucion(image_url):
+            try:
+                preparada = self._preparar_una(candidata)
+            except Exception:
+                preparada = None
+            if preparada is not None:
+                logger.info("Imagen en mayor resolución: %s (en vez de %s)", candidata, image_url)
+                return preparada
+        return self._preparar_una(image_url)
+
+    def _preparar_una(self, image_url: str) -> Optional[Tuple[bytes, str, str]]:
+        """Descarga una URL concreta y le quita los metadatos."""
 
         # User-Agent genérico: el anterior ("NecoNews/1.0") identificaba al portal por nombre
         # en los logs del sitio de origen.

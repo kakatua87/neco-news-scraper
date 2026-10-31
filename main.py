@@ -562,6 +562,15 @@ def pipeline_scraping() -> None:
                 # cuerpo corto; el editor la completa en /admin.
                 if len(texto) < 60 or _es_pagina_bloqueo(texto):
                     resumen_card = (note.get("resumen") or "").strip()
+                    # El listado no trae fecha: sin la nota abierta, solo se acepta si el permalink prueba que es de hoy.
+                    fecha_verificada = fecha_url == hoy or fecha_nota == hoy.isoformat()
+                    if len(resumen_card) >= 60 and not fecha_verificada:
+                        logger.info("Nota sin cuerpo y sin fecha verificable (podría ser vieja), se omite: %s", note_url)
+                        if intento:
+                            fila_nota["bloqueadas"] += 1
+                        else:
+                            fila_nota["sin_cuerpo"] += 1
+                        continue
                     if len(resumen_card) >= 60:
                         logger.warning(
                             "Nota %s sin cuerpo scrapeable (bloqueo/403); fallback al resumen del listado.",

@@ -17,7 +17,7 @@ jobs:
   scrape:
     # Fijo en 24.04: ubuntu-latest pasó a 26.04 y Playwright 1.52 no soporta Chromium ahí (el paso de instalación fallaba).
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

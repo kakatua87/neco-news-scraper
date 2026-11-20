@@ -1,0 +1,55 @@
+name: Probe Diario Necochea (temporal)
+
+# Prueba TEMPORAL y de solo lectura: ¿se puede leer diarionecochea.com por su feed RSS o por la API de WordPress,
+# directo (IP de GitHub) y por el proxy? Corre solo al pushear este archivo en la rama de trabajo. Se borra después.
+
+on:
+  push:
+    branches: [ccr-a47d7402-8klaw2]
+    paths: [".github/workflows/probe-diarionecochea.yml"]
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Probar feed y API de WordPress
+        env:
+          PROXY_LIST: ${{ secrets.PROXY_LIST }}
+          PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
+          PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
+        run: |
+          UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+          BASE="https://diarionecochea.com"
+          PROXY_HOST="$(echo "$PROXY_LIST" | cut -d, -f1)"
+          sonda() {  # $1=etiqueta  $2=ruta  $3=modo (directo|proxy)
+            local out="/tmp/r_$1.txt" args=(-sS -m 40 -A "$UA" -H "Accept: */*" -o "$out" -w "%{http_code} %{size_download}B %{time_total}s")
+            if [ "$3" = "proxy" ]; then args+=(-x "http://${PROXY_HOST}" -U "${PROXY_USERNAME}:${PROXY_PASSWORD}"); fi
+            local res; res="$(curl "${args[@]}" "$BASE$2" 2>&1 | tail -1)"
+            echo "[$3] $2 -> $res"
+            echo "    inicio: $(head -c 160 "$out" 2>/dev/null | tr '\n' ' ' | sed 's/[[:cntrl:]]//g')"
+          }
+          for modo in directo proxy; do
+            echo "================ modo: $modo ================"
+            sonda "home_$modo" "/" "$modo"
+            sonda "feed_$modo" "/feed/" "$modo"
+            sonda "api_$modo" "/wp-json/wp/v2/posts?per_page=5&_fields=id,date,link,title,excerpt,content" "$modo"
+          done
+          echo "================ análisis ================"
+          for modo in directo proxy; do
+            f="/tmp/r_feed_$modo.txt"; a="/tmp/r_api_$modo.txt"
+            if grep -q "<item>" "$f" 2>/dev/null; then
+              echo "[$modo] FEED OK: items=$(grep -o '<item>' "$f" | wc -l) | con content:encoded=$(grep -c 'content:encoded' "$f") | pubDate más reciente: $(grep -o '<pubDate>[^<]*' "$f" | head -1 | sed 's/<pubDate>//')"
+            else echo "[$modo] feed sin items"; fi
+            if python3 - "$a" <<'EOF'
+          import json,sys
+          try:
+              d=json.load(open(sys.argv[1]))
+              assert isinstance(d,list) and d
+              print("API OK: posts=%d | fecha más reciente=%s | largo contenido 1er post=%d" % (len(d), d[0].get("date"), len(((d[0].get("content") or {}).get("rendered")) or "")))
+              sys.exit(0)
+          except Exception as e:
+              print("API no usable (%s)" % type(e).__name__); sys.exit(1)
+          EOF
+            then :; fi
+          done

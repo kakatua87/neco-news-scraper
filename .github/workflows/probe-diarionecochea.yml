@@ -1,0 +1,40 @@
+name: Probe Diario Necochea API (temporal)
+
+# Prueba TEMPORAL y de solo lectura: estructura de la API de WordPress de diarionecochea.com. Solo corre al pushear este archivo
+# en la rama de trabajo. Se borra después.
+
+on:
+  push:
+    branches: [ccr-a47d7402-8klaw2]
+    paths: [".github/workflows/probe-diarionecochea.yml"]
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Estructura de la API
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          url = "https://diarionecochea.com/wp-json/wp/v2/posts?per_page=40&_embed=1"
+          req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/124.0 Safari/537.36"})
+          with urllib.request.urlopen(req, timeout=40) as r:
+              posts = json.load(r)
+          print("posts:", len(posts), "| claves:", sorted(posts[0].keys()))
+          print("_embedded claves:", sorted(posts[0].get("_embedded", {}).keys()))
+          for p in posts[:4]:
+              emb = p.get("_embedded", {})
+              fm = (emb.get("wp:featuredmedia") or [{}])[0]
+              terms = [[t.get("name") for t in grupo] for grupo in emb.get("wp:term", [])]
+              print("---")
+              print("link:", p["link"])
+              print("date:", p["date"], "| date_gmt:", p.get("date_gmt"))
+              print("title:", p["title"]["rendered"][:80])
+              print("content len:", len(p["content"]["rendered"]), "| excerpt len:", len(p["excerpt"]["rendered"]))
+              print("featuredmedia source_url:", fm.get("source_url"), "| mime:", fm.get("mime_type"))
+              print("terms:", terms)
+          import collections
+          hoy = collections.Counter(p["date"][:10] for p in posts)
+          print("posts por día:", dict(sorted(hoy.items(), reverse=True)))
+          PY

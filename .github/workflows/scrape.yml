@@ -4,9 +4,13 @@ name: Scrape noticias (Fase 1)
 # No usa IA ni Telegram. Corre en Actions porque en Render Free el proceso se
 # duerme a los 15 min y el APScheduler in-process deja de disparar.
 
+# GitHub NO cumple los crons: entre el 10 y el 20/11 corrió solo ~26 % de las ejecuciones programadas (3 por día en vez
+# de 12; hueco mediano 8 h, máximo 12 h). Por eso hay dos disparos por hora, a minutos poco usados, y el primer paso
+# decide si toca correr: si la última corrida terminó hace menos de MIN_MINUTOS (según `fuentes_salud`), se omite.
+# Con GitHub sano se mantiene el ritmo de ~2 h; con GitHub fallando, los disparos extra cubren los huecos.
 on:
   schedule:
-    - cron: "17 */2 * * *"   # cada 2 horas, al minuto 17 (fuera del pico de :00/:30, donde GitHub más demora o saltea)
+    - cron: "17,47 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -19,20 +23,47 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      - name: ¿Toca correr?
+        id: guard
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          MIN_MINUTOS: "100"
+        run: |
+          # Las corridas manuales siempre corren. Si no se puede consultar la base, también corre (no perder una corrida).
+          if [ "${{ github.event_name }}" != "schedule" ]; then echo "correr=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          resp="$(curl -fsS --max-time 20 -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $SUPABASE_KEY" \
+            "$SUPABASE_URL/rest/v1/fuentes_salud?select=ts&order=ts.desc&limit=1" 2>/dev/null || true)"
+          ultima="$(echo "$resp" | jq -r '.[0].ts // empty' 2>/dev/null || true)"
+          minutos=-1
+          if [ -n "$ultima" ]; then minutos=$(( ( $(date +%s) - $(date -d "$ultima" +%s) ) / 60 )); fi
+          echo "Minutos desde la última corrida registrada: $minutos (mínimo para correr: $MIN_MINUTOS)"
+          if [ "$minutos" -ge 0 ] && [ "$minutos" -lt "$MIN_MINUTOS" ]; then
+            echo "Corrida reciente: se omite."
+            echo "correr=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "correr=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.guard.outputs.correr == 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.guard.outputs.correr == 'true'
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Instalar dependencias
+        if: steps.guard.outputs.correr == 'true'
         run: pip install -r requirements.txt
 
       - name: Instalar Chromium (Playwright)
+        if: steps.guard.outputs.correr == 'true'
         run: python -m playwright install --with-deps chromium
 
       - name: pipeline_scraping
+        if: steps.guard.outputs.correr == 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -50,6 +81,7 @@ jobs:
       # El scraper no tiene claves de IA: la predicción de sección de los grupos que las palabras clave no resolvieron
       # la hace Render (que sí las tiene). Si Render está dormido tarda en despertar; un fallo acá no invalida la corrida.
       - name: Clasificar pendientes (IA en Render)
+        if: steps.guard.outputs.correr == 'true'
         continue-on-error: true
         run: |
           curl -fsS --retry 3 --retry-delay 20 --max-time 150 -X POST \

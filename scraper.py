@@ -175,6 +175,9 @@ DOMAIN_CONTENT_SELECTORS: Dict[str, List[str]] = {
 # Diario Necochea es WordPress: su API pública trae el texto completo, la fecha y la foto de cada nota sin pasar por
 # el WAF del sitio ni por el proxy (que además rechazaba las credenciales con 407).
 API_WP_DIARIO_NECOCHEA = "https://diarionecochea.com/wp-json/wp/v2/posts"
+# La API rechaza con 502 (de forma consistente, no intermitente) a httpx/requests que se presentan como Chrome en Windows
+# desde una IP de GitHub, y responde 200 con un User-Agent de Linux (probado 12/12). Se usa ese solo para esta llamada.
+API_WP_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) Chrome/124.0 Safari/537.36"
 # Categorías de WordPress que no son una sección del portal (se saltean al elegir la etiqueta de la nota).
 CATEGORIAS_GENERICAS = {"destacada", "destacadas", "portada", "sin categoría", "sin categoria", "uncategorized"}
 
@@ -245,7 +248,7 @@ class NewsScraper:
                 r = httpx.get(
                     API_WP_DIARIO_NECOCHEA,
                     params={"per_page": 40, "_embed": 1},
-                    headers={"User-Agent": BROWSER_CONTEXT_KWARGS["user_agent"], "Accept": "application/json"},
+                    headers={"User-Agent": API_WP_USER_AGENT, "Accept": "application/json"},
                     timeout=30,
                     follow_redirects=True,
                 )

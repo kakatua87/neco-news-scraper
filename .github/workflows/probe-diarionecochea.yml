@@ -1,7 +1,7 @@
-name: Probe Diario Necochea cliente (temporal)
+name: Probe Diario Necochea scraper v2 (temporal)
 
-# Prueba TEMPORAL y de solo lectura: qué cliente / User-Agent acepta la API de WordPress de diarionecochea.com (httpx recibió 502).
-# Solo corre al pushear este archivo en la rama de trabajo. Se borra después.
+# Prueba TEMPORAL y de solo lectura: ejecuta el scraper nuevo de Diario Necochea contra el sitio real, sin base de datos
+# ni proxy ni navegador. Solo corre al pushear este archivo en la rama de trabajo. Se borra después.
 
 on:
   push:
@@ -13,42 +13,38 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Comparar clientes y cabeceras
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencias mínimas
+        run: pip install -q beautifulsoup4==4.12.3 httpx==0.27.2 playwright==1.52.0 python-dotenv==1.0.1
+      - name: Scraper nuevo contra el sitio real
         run: |
-          pip install -q httpx==0.27.2 requests==2.31.0
           python - <<'PY'
-          import time, urllib.request, httpx, requests
-          URL = "https://diarionecochea.com/wp-json/wp/v2/posts"
-          WIN = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          LIN = "Mozilla/5.0 (X11; Linux x86_64) Chrome/124.0 Safari/537.36"
-          def u(h, params):
-              q = "&".join(f"{k}={v}" for k, v in params.items())
-              req = urllib.request.Request(URL + "?" + q, headers=h)
-              try:
-                  with urllib.request.urlopen(req, timeout=30) as r: return r.status
-              except urllib.error.HTTPError as e: return e.code
-              except Exception as e: return type(e).__name__
-          def hx(h, params):
-              try: return httpx.get(URL, params=params, headers=h, timeout=30, follow_redirects=True).status_code
-              except Exception as e: return type(e).__name__
-          def rq(h, params):
-              try: return requests.get(URL, params=params, headers=h, timeout=30).status_code
-              except Exception as e: return type(e).__name__
-          P40 = {"per_page": 40, "_embed": 1}
-          P20 = {"per_page": 20, "_embed": 1}
-          casos = [
-            ("urllib  UA linux      p40", u,  {"User-Agent": LIN}, P40),
-            ("urllib  UA windows    p40", u,  {"User-Agent": WIN}, P40),
-            ("httpx   UA linux      p40", hx, {"User-Agent": LIN}, P40),
-            ("httpx   UA windows    p40", hx, {"User-Agent": WIN}, P40),
-            ("httpx   UA win+Accept p40", hx, {"User-Agent": WIN, "Accept": "application/json"}, P40),
-            ("httpx   UA linux      p20", hx, {"User-Agent": LIN}, P20),
-            ("requests UA linux     p40", rq, {"User-Agent": LIN}, P40),
-            ("requests UA windows   p40", rq, {"User-Agent": WIN}, P40),
-          ]
-          for nombre, f, h, p in casos:
-              res = []
-              for _ in range(4):
-                  res.append(f(h, p)); time.sleep(2)
-              print(f"{nombre:28s} -> {res}")
+          import collections, logging
+          logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+          import scraper, fechas_notas
+          usado_respaldo = []
+          scraper.NewsScraper._scrape_diario_necochea_portada = lambda self: usado_respaldo.append(1) or []
+          sc = scraper.NewsScraper()
+          items = sc.scrape_diario_necochea()
+          print("\n=== RESULTADO ===")
+          print("usó el respaldo de la portada:", bool(usado_respaldo))
+          print("notas:", len(items), "| métricas:", sc.metricas.get("Diario Necochea"))
+          hoy = fechas_notas.hoy_ar()
+          print("hoy (ART):", hoy)
+          por_fecha = collections.Counter(str(fechas_notas.fecha_desde_url(i["url"])) for i in items)
+          print("por fecha de URL:", dict(sorted(por_fecha.items(), reverse=True)))
+          print("notas de HOY según URL:", sum(1 for i in items if fechas_notas.fecha_desde_url(i["url"]) == hoy))
+          print("secciones:", dict(collections.Counter(i["seccion"] for i in items)))
+          print("con cuerpo completo en caché:", sum(1 for i in items if i["url"] in sc._articulos_api), "de", len(items))
+          print("sin foto:", sum(1 for i in items if not i["imagen_url"]))
+          if items:
+              i = items[0]
+              art = sc.get_article_content(i["url"])
+              print("--- primera nota ---")
+              print("título:", i["titulo"]); print("url:", i["url"]); print("sección:", i["seccion"], "| original:", i["seccion_original"])
+              print("fecha:", art["fecha"], "| largo texto:", len(art["text"]), "| foto:", art["og_image"])
+              print("inicio del texto:", art["text"][:200].replace("\n", " ⏎ "))
           PY

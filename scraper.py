@@ -14,6 +14,7 @@ Selectores específicos por dominio para máxima calidad de contenido.
 """
 
 import html as html_lib
+import hashlib
 import logging
 import random
 import re
@@ -50,6 +51,11 @@ BROWSER_CONTEXT_KWARGS = dict(
 def _pausa_humana(min_s: float = 0.8, max_s: float = 2.5) -> None:
     """Demora aleatoria entre requests para no tener un patrón de timing perfecto."""
     time.sleep(random.uniform(min_s, max_s))
+
+
+def _proxy_anonimo(servidor: str) -> str:
+    """Identificador corto del proxy para los logs (los logs de GitHub Actions de un repo público los lee cualquiera)."""
+    return "#" + hashlib.sha1((servidor or "").encode()).hexdigest()[:6]
 
 
 def _elegir_proxy(url: str = "") -> Optional[dict]:
@@ -112,7 +118,7 @@ def _abrir_pagina(browser: Browser, url: str, timeout: int = 30000, forzar_direc
     except Exception as e:
         if proxy is None:
             raise
-        logger.warning("Proxy %s falló para %s (%s) — reintentando directo.", proxy["server"], url, e)
+        logger.warning("Proxy %s falló para %s (%s) — reintentando directo.", _proxy_anonimo(proxy["server"]), url, e)
         page.close()
         context.close()
         context = _nuevo_contexto(browser, proxy=None)

@@ -13,6 +13,10 @@ on:
     - cron: "17,47 * * * *"
   workflow_dispatch:
 
+# Permisos mínimos del token del workflow: solo leer el código.
+permissions:
+  contents: read
+
 concurrency:
   group: scrape-fase1
   cancel-in-progress: false   # no matar una corrida en curso

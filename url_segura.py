@@ -6,15 +6,17 @@ Playwright desde el servidor: una URL que apunte a localhost, a la red interna o
 nube (169.254.169.254) haría que el scraper consulte recursos privados. Solo se aceptan URLs http(s)
 cuyo host resuelva ÚNICAMENTE a direcciones públicas.
 
-Limitación conocida: es un chequeo previo a la conexión. No cubre redirecciones a destinos internos
-ni DNS rebinding (el host resolviendo distinto entre el chequeo y la conexión real).
+`descargar_publica` aplica el chequeo a cada salto de una redirección y limita el tamaño de lo descargado.
+
+Limitación conocida: es un chequeo previo a la conexión. No cubre DNS rebinding (el host resolviendo distinto
+entre el chequeo y la conexión real).
 Función pura salvo por la resolución DNS, que se puede inyectar para probar.
 """
 
 import ipaddress
 import socket
 from typing import Callable, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 
 def _es_global(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:
@@ -48,3 +50,61 @@ def url_es_publica(url: str, resolver: Optional[Callable[[str, int], List[str]]]
             return False  # no resuelve: no se abre
 
     return bool(direcciones) and all(_es_global(d) for d in direcciones)
+
+
+# Tope de lo que se baja de una URL ajena: una foto de noticia pesa unos cientos de KB. Sin tope, una URL maliciosa
+# (o un sitio roto) que devuelva varios GB agotaría la memoria del servicio (512 MB en el plan gratis de Render).
+MAX_BYTES_DESCARGA = 15 * 1024 * 1024
+_REDIRECCIONES = (301, 302, 303, 307, 308)
+
+
+def descargar_publica(
+    url: str,
+    *,
+    timeout: int = 10,
+    headers: Optional[dict] = None,
+    max_redirecciones: int = 3,
+    max_bytes: int = MAX_BYTES_DESCARGA,
+    resolver: Optional[Callable[[str, int], List[str]]] = None,
+    get: Optional[Callable] = None,
+):
+    """
+    Descarga `url` solo si es pública (ver url_es_publica), siguiendo hasta `max_redirecciones` redirecciones
+    chequeando cada destino, y cortando si supera `max_bytes`. Devuelve la respuesta de `requests` con el
+    contenido ya leído (`.status_code`, `.headers`, `.content`), o None si la URL no es pública, redirige a un
+    destino no público, hay demasiadas redirecciones, es demasiado grande o la conexión falla.
+    """
+    import requests  # import local: el resto del módulo no necesita red
+
+    pedir = get or requests.get
+    actual = url
+    try:
+        for _ in range(max_redirecciones + 1):
+            if not url_es_publica(actual, resolver):
+                return None
+            r = pedir(actual, timeout=timeout, headers=headers, allow_redirects=False, stream=True)
+            if r.status_code in _REDIRECCIONES:
+                destino = r.headers.get("Location")
+                r.close()
+                if not destino:
+                    return None
+                actual = urljoin(actual, destino)
+                continue
+            declarado = r.headers.get("Content-Length", "")
+            if declarado.isdigit() and int(declarado) > max_bytes:
+                r.close()
+                return None
+            total = 0
+            partes = []
+            for trozo in r.iter_content(65536):
+                total += len(trozo)
+                if total > max_bytes:
+                    r.close()
+                    return None
+                partes.append(trozo)
+            r._content = b"".join(partes)
+            r._content_consumed = True
+            return r
+    except requests.RequestException:
+        return None
+    return None  # demasiadas redirecciones

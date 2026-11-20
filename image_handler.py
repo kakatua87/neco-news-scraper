@@ -14,6 +14,7 @@ from PIL import Image
 
 
 import config
+import url_segura
 
 logger = logging.getLogger("neconews.image_handler")
 
@@ -196,7 +197,11 @@ class ImageHandler:
                 "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             )
         }
-        response = requests.get(image_url, timeout=10, headers=headers)
+        # La URL sale de una página ajena: solo se baja si es pública (sin redirecciones a la red interna) y con tope de tamaño.
+        response = url_segura.descargar_publica(image_url, timeout=10, headers=headers)
+        if response is None:
+            logger.warning("Imagen no descargada (URL no pública, redirección insegura o demasiado grande): %s", image_url)
+            return None
 
         if response.status_code != 200:
             logger.warning("Fallo al descargar imagen. Status: %s | URL: %s", response.status_code, image_url)
@@ -258,8 +263,8 @@ class ImageHandler:
         """
         try:
             headers = {"User-Agent": "Mozilla/5.0"}
-            r = requests.get(image_url, timeout=10, headers=headers)
-            if r.status_code != 200 or not r.headers.get("Content-Type", "").startswith("image/"):
+            r = url_segura.descargar_publica(image_url, timeout=10, headers=headers)
+            if r is None or r.status_code != 200 or not r.headers.get("Content-Type", "").startswith("image/"):
                 return None
             recortada = recortar_franja_inferior(r.content)
             if recortada is None:

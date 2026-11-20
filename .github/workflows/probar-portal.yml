@@ -6,6 +6,10 @@ name: Probar portal
 on:
   workflow_dispatch:
 
+# Permisos mínimos del token del workflow: solo leer el código.
+permissions:
+  contents: read
+
 jobs:
   run:
     runs-on: ubuntu-latest

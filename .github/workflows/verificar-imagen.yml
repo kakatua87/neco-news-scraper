@@ -10,6 +10,10 @@ on:
         description: "URLs de imagen separadas por espacio (máx. 5)"
         required: true
 
+# Permisos mínimos del token del workflow: solo leer el código.
+permissions:
+  contents: read
+
 jobs:
   run:
     runs-on: ubuntu-latest

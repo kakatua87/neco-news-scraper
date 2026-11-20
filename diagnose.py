@@ -6,7 +6,9 @@ import os
 import requests
 import json
 
-BASE = "https://neco-news-scraper.onrender.com"
+BASE = os.getenv("SCRAPER_URL", "").rstrip("/")
+if not BASE:
+    raise SystemExit("Falta SCRAPER_URL en el entorno (la URL del servicio en Render).")
 HEADERS = {"Authorization": f"Bearer {os.getenv('INTERNAL_API_SECRET', '')}"}
 
 # 1. Stats actuales

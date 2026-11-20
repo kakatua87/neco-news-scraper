@@ -11,6 +11,7 @@ API: FastAPI con /health, /telegram/callback, /procesar-grupo, /run, /run-servic
 """
 
 import argparse
+import hmac
 import logging
 import math
 import os
@@ -50,7 +51,8 @@ if not logging.getLogger().handlers:
 logger = logging.getLogger("neconews.pipeline")
 
 # ─── FastAPI ─────────────────────────────────────────────────────
-app = FastAPI(title="Neco News Scraper", version="3.0.0")
+# Sin /docs, /redoc ni /openapi.json: el servicio es público en internet y esas páginas describen todos los endpoints.
+app = FastAPI(title="Neco News Scraper", version="3.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 scheduler = BackgroundScheduler(timezone="America/Argentina/Buenos_Aires")
 
 
@@ -847,7 +849,8 @@ def require_internal_secret(authorization: str = Header(default="")) -> None:
     no está configurado, deniega por defecto en vez de dejar todo abierto.
     """
     esperado = config.INTERNAL_API_SECRET
-    if not esperado or authorization != f"Bearer {esperado}":
+    # Comparación en tiempo constante: con != el tiempo de respuesta delata cuántos caracteres iniciales coinciden.
+    if not esperado or not hmac.compare_digest(authorization.encode(), f"Bearer {esperado}".encode()):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 

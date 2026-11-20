@@ -9,6 +9,10 @@ on:
     - cron: "0 10 * * *"   # ~07:00 ART
   workflow_dispatch:
 
+# Permisos mínimos del token del workflow: solo leer el código.
+permissions:
+  contents: read
+
 concurrency:
   group: services-diario
   cancel-in-progress: false

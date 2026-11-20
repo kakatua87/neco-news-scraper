@@ -13,10 +13,12 @@ Usa Playwright headless + BeautifulSoup para extracción robusta.
 Selectores específicos por dominio para máxima calidad de contenido.
 """
 
+import html as html_lib
 import logging
 import random
 import re
 import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse, quote
 
@@ -170,11 +172,20 @@ DOMAIN_CONTENT_SELECTORS: Dict[str, List[str]] = {
 }
 
 
+# Diario Necochea es WordPress: su API pública trae el texto completo, la fecha y la foto de cada nota sin pasar por
+# el WAF del sitio ni por el proxy (que además rechazaba las credenciales con 407).
+API_WP_DIARIO_NECOCHEA = "https://diarionecochea.com/wp-json/wp/v2/posts"
+# Categorías de WordPress que no son una sección del portal (se saltean al elegir la etiqueta de la nota).
+CATEGORIAS_GENERICAS = {"destacada", "destacadas", "portada", "sin categoría", "sin categoria", "uncategorized"}
+
+
 class NewsScraper:
     def __init__(self, existing_urls: Optional[Set[str]] = None) -> None:
         self.existing_urls = existing_urls or set()
         # Por fuente: tarjetas halladas en la portada y notas nuevas. Lo lee pipeline_scraping para `fuentes_salud`.
         self.metricas: Dict[str, Dict[str, int]] = {}
+        # Notas que ya llegaron completas (texto, foto, fecha) desde una API: get_article_content las devuelve sin abrir la página.
+        self._articulos_api: Dict[str, Dict] = {}
 
     def scrape_generic(self, url: str, fuente: str) -> List[Dict]:
         """
@@ -215,7 +226,109 @@ class NewsScraper:
         )
 
     def scrape_diario_necochea(self) -> List[Dict]:
-        """Scrapea la homepage de Diario Necochea."""
+        """Diario Necochea por la API de WordPress; si falla, recurre al scraping de la portada."""
+        try:
+            items = self._scrape_diario_necochea_api()
+        except Exception:
+            logger.exception("Falló la API de WordPress de Diario Necochea; se usa la portada.")
+            items = None
+        if items is not None:
+            return items
+        return self._scrape_diario_necochea_portada()
+
+    def _scrape_diario_necochea_api(self) -> Optional[List[Dict]]:
+        """Notas recientes desde /wp-json/wp/v2/posts. Devuelve None si la API no responde (para usar el respaldo)."""
+        logger.info("Leyendo Diario Necochea por la API de WordPress...")
+        posts = None
+        for intento in range(2):
+            try:
+                r = httpx.get(
+                    API_WP_DIARIO_NECOCHEA,
+                    params={"per_page": 40, "_embed": 1},
+                    headers={"User-Agent": BROWSER_CONTEXT_KWARGS["user_agent"], "Accept": "application/json"},
+                    timeout=30,
+                    follow_redirects=True,
+                )
+                datos = r.json() if r.status_code == 200 else None
+                if isinstance(datos, list):
+                    posts = datos
+                    break
+                logger.warning("API de Diario Necochea: respuesta inesperada (HTTP %s), intento %s.", r.status_code, intento + 1)
+            except Exception as e:
+                logger.warning("API de Diario Necochea: %s (intento %s)", e, intento + 1)
+            time.sleep(2)
+        if posts is None:
+            return None
+
+        items: List[Dict] = []
+        for post in posts:
+            try:
+                item = self._item_desde_post_wp(post)
+            except Exception:
+                logger.exception("No se pudo leer un post de Diario Necochea: %s", post.get("link"))
+                continue
+            if item and item["url"] not in self.existing_urls:
+                items.append(item)
+        logger.info("Encontradas %s notas nuevas en https://diarionecochea.com (API, %s leídas)", len(items), len(posts))
+        self.metricas["Diario Necochea"] = {"tarjetas": len(posts), "nuevas": len(items)}
+        return items
+
+    def _item_desde_post_wp(self, post: Dict) -> Optional[Dict]:
+        """Convierte un post de WordPress al formato de las tarjetas y deja su contenido completo en caché."""
+        url = (post.get("link") or "").strip()
+        titulo = self._texto_plano((post.get("title") or {}).get("rendered", ""))
+        if not url or not titulo:
+            return None
+        contenido_html = (post.get("content") or {}).get("rendered", "")
+        texto = self._texto_de_html(contenido_html)
+        embebido = post.get("_embedded") or {}
+        media = (embebido.get("wp:featuredmedia") or [{}])[0] or {}
+        foto = media.get("source_url") or None
+        etiqueta = ""
+        for grupo in (embebido.get("wp:term") or [])[:1]:  # el primer grupo son las categorías (el segundo, las etiquetas)
+            for cat in grupo or []:
+                nombre = (cat.get("name") or "").strip()
+                if nombre and nombre.lower() not in CATEGORIAS_GENERICAS:
+                    etiqueta = html_lib.unescape(nombre)
+                    break
+        fecha = None
+        if post.get("date_gmt"):
+            fecha = datetime.fromisoformat(post["date_gmt"]).replace(tzinfo=timezone.utc).astimezone(fechas_notas.ART).date().isoformat()
+        primera_img = BeautifulSoup(contenido_html, "html.parser").find("img")
+        if len(texto) >= 60:
+            self._articulos_api[url] = {
+                "text": texto,
+                "og_image": foto,
+                "content_image": (primera_img.get("src") if primera_img else None) or None,
+                "fecha": fecha,
+            }
+        resumen = re.sub(r"\s*(\[…\]|\[&hellip;\]|…)\s*$", "", self._texto_plano((post.get("excerpt") or {}).get("rendered", "")))
+        return {
+            "titulo": titulo,
+            "url": url,
+            "imagen_url": foto,
+            "seccion": self._normalize_section(etiqueta) if etiqueta else "General",
+            "seccion_original": etiqueta,
+            "fuente": "Diario Necochea",
+            "resumen": resumen,
+        }
+
+    @staticmethod
+    def _texto_plano(fragmento_html: str) -> str:
+        return html_lib.unescape(BeautifulSoup(fragmento_html or "", "html.parser").get_text(" ", strip=True)).strip()
+
+    @staticmethod
+    def _texto_de_html(fragmento_html: str) -> str:
+        """Texto de un fragmento de WordPress: un párrafo por bloque (p, títulos, listas), sin scripts ni embeds."""
+        soup = BeautifulSoup(fragmento_html or "", "html.parser")
+        for t in soup(["script", "style", "iframe", "noscript"]):
+            t.decompose()
+        parrafos = [p.get_text(" ", strip=True) for p in soup.find_all(["p", "h2", "h3", "h4", "li"])]
+        parrafos = [html_lib.unescape(p) for p in parrafos if p]
+        return "\n\n".join(parrafos) if parrafos else html_lib.unescape(soup.get_text("\n", strip=True))
+
+    def _scrape_diario_necochea_portada(self) -> List[Dict]:
+        """Respaldo: scrapea la homepage de Diario Necochea (la API de WordPress es la vía principal)."""
         base_url = "https://diarionecochea.com"
         logger.info("Scrapeando homepage Diario Necochea...")
         return self._scrape_homepage(
@@ -290,6 +403,9 @@ class NewsScraper:
         Retorna dict: {"text": str, "og_image": str|None, "content_image": str|None, "fecha": "YYYY-MM-DD"|None}
         (`fecha` = día argentino de publicación, ver fechas_notas)
         """
+        if url in self._articulos_api:
+            logger.info("Cuerpo completo ya traído por la API: %s", url)
+            return dict(self._articulos_api[url])
         logger.info("Extrayendo cuerpo completo: %s", url)
         domain = self._get_domain(url)
 

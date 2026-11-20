@@ -251,7 +251,7 @@ PROXY_PASSWORD: str = os.getenv("PROXY_PASSWORD", "").strip()
 # y bloquean el scraping desde IP de datacenter). Set vacío = proxy para todo.
 PROXY_ONLY_DOMAINS: set = {
     d.strip().lower().removeprefix("www.")
-    for d in os.getenv("PROXY_ONLY_DOMAINS", "diarionecochea.com,diario4v.com").split(",")
+    for d in os.getenv("PROXY_ONLY_DOMAINS", "diario4v.com").split(",")
     if d.strip()
 }
 

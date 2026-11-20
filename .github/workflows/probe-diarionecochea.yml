@@ -1,7 +1,7 @@
-name: Probe Diario Necochea API (temporal)
+name: Probe Diario Necochea scraper (temporal)
 
-# Prueba TEMPORAL y de solo lectura: estructura de la API de WordPress de diarionecochea.com. Solo corre al pushear este archivo
-# en la rama de trabajo. Se borra después.
+# Prueba TEMPORAL y de solo lectura: ejecuta el scraper nuevo de Diario Necochea contra el sitio real, sin base de datos
+# ni proxy. Solo corre al pushear este archivo en la rama de trabajo. Se borra después.
 
 on:
   push:
@@ -13,28 +13,36 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Estructura de la API
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencias mínimas
+        run: pip install -q beautifulsoup4==4.12.3 httpx==0.27.2 playwright==1.52.0 python-dotenv==1.0.1
+      - name: Scraper nuevo contra el sitio real
         run: |
-          python3 - <<'PY'
-          import json, urllib.request
-          url = "https://diarionecochea.com/wp-json/wp/v2/posts?per_page=40&_embed=1"
-          req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/124.0 Safari/537.36"})
-          with urllib.request.urlopen(req, timeout=40) as r:
-              posts = json.load(r)
-          print("posts:", len(posts), "| claves:", sorted(posts[0].keys()))
-          print("_embedded claves:", sorted(posts[0].get("_embedded", {}).keys()))
-          for p in posts[:4]:
-              emb = p.get("_embedded", {})
-              fm = (emb.get("wp:featuredmedia") or [{}])[0]
-              terms = [[t.get("name") for t in grupo] for grupo in emb.get("wp:term", [])]
-              print("---")
-              print("link:", p["link"])
-              print("date:", p["date"], "| date_gmt:", p.get("date_gmt"))
-              print("title:", p["title"]["rendered"][:80])
-              print("content len:", len(p["content"]["rendered"]), "| excerpt len:", len(p["excerpt"]["rendered"]))
-              print("featuredmedia source_url:", fm.get("source_url"), "| mime:", fm.get("mime_type"))
-              print("terms:", terms)
-          import collections
-          hoy = collections.Counter(p["date"][:10] for p in posts)
-          print("posts por día:", dict(sorted(hoy.items(), reverse=True)))
+          python - <<'PY'
+          import collections, logging
+          logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+          import scraper, fechas_notas
+          sc = scraper.NewsScraper()
+          items = sc.scrape_diario_necochea()
+          print("\n=== RESULTADO ===")
+          print("notas:", len(items), "| métricas:", sc.metricas.get("Diario Necochea"))
+          hoy = fechas_notas.hoy_ar()
+          print("hoy (ART):", hoy)
+          por_fecha = collections.Counter(fechas_notas.fecha_desde_url(i["url"]) for i in items)
+          print("por fecha de URL:", dict(sorted(((str(k), v) for k, v in por_fecha.items()), reverse=True)))
+          print("secciones:", dict(collections.Counter(i["seccion"] for i in items)))
+          en_cache = sum(1 for i in items if i["url"] in sc._articulos_api)
+          print("con cuerpo completo en caché:", en_cache, "de", len(items))
+          sin_foto = sum(1 for i in items if not i["imagen_url"])
+          print("sin foto:", sin_foto)
+          if items:
+              i = items[0]
+              art = sc.get_article_content(i["url"])
+              print("--- primera nota ---")
+              print("título:", i["titulo"]); print("url:", i["url"]); print("sección:", i["seccion"], "| original:", i["seccion_original"])
+              print("fecha:", art["fecha"], "| largo texto:", len(art["text"]), "| foto:", art["og_image"])
+              print("inicio del texto:", art["text"][:200].replace("\n", " ⏎ "))
           PY

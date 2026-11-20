@@ -23,9 +23,12 @@ jobs:
           BASE="https://diarionecochea.com"
           PROXY_HOST="$(echo "$PROXY_LIST" | cut -d, -f1)"
           sonda() {  # $1=etiqueta  $2=ruta  $3=modo (directo|proxy)
-            local out="/tmp/r_$1.txt" args=(-sS -m 40 -A "$UA" -H "Accept: */*" -o "$out" -w "%{http_code} %{size_download}B %{time_total}s")
-            if [ "$3" = "proxy" ]; then args+=(-x "http://${PROXY_HOST}" -U "${PROXY_USERNAME}:${PROXY_PASSWORD}"); fi
-            local res; res="$(curl "${args[@]}" "$BASE$2" 2>&1 | tail -1)"
+            out="/tmp/r_$1.txt"; rm -f "$out"
+            if [ "$3" = "proxy" ]; then
+              res="$(curl -sS -m 40 -A "$UA" -o "$out" -w '%{http_code} %{size_download}B %{time_total}s' -x "http://${PROXY_HOST}" -U "${PROXY_USERNAME}:${PROXY_PASSWORD}" "$BASE$2" 2>&1 | tr '\n' ' ')" || true
+            else
+              res="$(curl -sS -m 40 -A "$UA" -o "$out" -w '%{http_code} %{size_download}B %{time_total}s' "$BASE$2" 2>&1 | tr '\n' ' ')" || true
+            fi
             echo "[$3] $2 -> $res"
             echo "    inicio: $(head -c 160 "$out" 2>/dev/null | tr '\n' ' ' | sed 's/[[:cntrl:]]//g')"
           }
